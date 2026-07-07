@@ -1,0 +1,21 @@
+# --- Секреты и приватные данные (НИКОГДА не коммитить) ---
+.env
+.env.local
+secrets/
+data/
+personal/
+
+# --- Сборки и зависимости ---
+node_modules/
+dashboard/web/dist/
+dashboard/server/data-cache/
+dashboard/server/public/
+*.tsbuildinfo
+
+# --- Локальные настройки инструментов ---
+.claude/settings.local.json
+.DS_Store
+*.log
+
+# Экспортированные банковские выписки и т.п.
+*.csv
