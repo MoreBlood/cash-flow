@@ -1,8 +1,10 @@
 import * as api from '@actual-app/api';
-import { createServer } from 'node:http';
+import Database from 'better-sqlite3';
+import { execFile } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { readFileSync, existsSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { createServer } from 'node:http';
+import { dirname, extname, join, normalize, relative } from 'node:path';
 
 // dev-фолбэк: подтянуть недостающие переменные из .env в корне репозитория
 if (!process.env.ACTUAL_PASSWORD) {
@@ -40,6 +42,58 @@ function readSyncState() {
     return { lastBankSyncAt: null };
   }
 }
+// --- Бэкап в iCloud после успешного синка ---------------------------------
+const BACKUP_SRC = process.env.BACKUP_SRC; // /actual (bind-mount data/actual)
+const BACKUP_DIR = process.env.BACKUP_DIR; // /backup (bind-mount iCloud)
+const BACKUP_KEEP = Number(process.env.BACKUP_KEEP || 30);
+
+function backupStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// Консистентный снапшот BACKUP_SRC → BACKUP_DIR/actual-<ts>.tgz (best-effort).
+// sqlite копируем через online-backup (консистентно при живом actual-server), остальное — как есть.
+async function backupToICloud() {
+  if (!BACKUP_DIR || !BACKUP_SRC || !existsSync(BACKUP_SRC)) return null;
+  const stage = join('/tmp', `bk-${Date.now()}`);
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+    );
+  try {
+    for (const f of walk(BACKUP_SRC)) {
+      if (f.endsWith('.sqlite-wal') || f.endsWith('.sqlite-shm')) continue;
+      const dest = join(stage, relative(BACKUP_SRC, f));
+      mkdirSync(dirname(dest), { recursive: true });
+      if (f.endsWith('.sqlite')) {
+        const db = new Database(f);
+        try {
+          await db.backup(dest);
+        } finally {
+          db.close();
+        }
+      } else {
+        copyFileSync(f, dest);
+      }
+    }
+    const arc = join(BACKUP_DIR, `actual-${backupStamp()}.tgz`);
+    await new Promise((res, rej) =>
+      execFile('tar', ['czf', arc, '-C', stage, '.'], (e) => (e ? rej(e) : res())),
+    );
+    // ротация: оставить последние BACKUP_KEEP архивов
+    const arcs = readdirSync(BACKUP_DIR)
+      .filter((f) => f.startsWith('actual-') && f.endsWith('.tgz'))
+      .sort()
+      .reverse();
+    for (const old of arcs.slice(BACKUP_KEEP)) rmSync(join(BACKUP_DIR, old), { force: true });
+    return arc;
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
 async function runBankSync() {
   if (bankSyncing) return { alreadyRunning: true, ...readSyncState() };
   bankSyncing = true;
@@ -49,6 +103,12 @@ async function runBankSync() {
     lastSync = Date.now();
     const state = { lastBankSyncAt: new Date().toISOString() };
     await writeFile(SYNC_STATE, JSON.stringify(state)).catch(() => {});
+    // копия в iCloud — не валим синк, если бэкап не удался
+    const arc = await backupToICloud().catch((e) => {
+      console.error('[backup] не удалось:', e?.message || e);
+      return null;
+    });
+    if (arc) console.log('[backup] снапшот в iCloud:', arc);
     return state;
   } finally {
     bankSyncing = false;
@@ -171,7 +231,10 @@ async function summary(from, to, base = 'PLN') {
     let accNet = 0;
     let accCount = 0;
     for (const t of txs) {
-      if (t.is_parent || t.starting_balance_flag || t.transfer_id) continue;
+      if (t.is_parent || t.transfer_id) continue;
+      const pn = pById[t.payee] || t.imported_payee || '—';
+      // стартовый остаток счёта (флаг Actual или его служебный payee) — не денежный поток
+      if (t.starting_balance_flag || pn === 'Starting Balance') continue;
       if (t.category && excluded.has(t.category)) {
         excludedCount++;
         continue;
@@ -181,9 +244,17 @@ async function summary(from, to, base = 'PLN') {
       accCount++;
       if (pln >= 0) income += pln;
       else expense += pln;
-      daily.set(t.date, (daily.get(t.date) || 0) + pln);
 
       const info = t.category ? catInfo[t.category] : null;
+      const day = daily.get(t.date) || { net: 0, expense: 0, cats: new Map() };
+      day.net += pln;
+      if (pln < 0) {
+        // трата за день (положительное число) + разбивка по категориям «на что»
+        day.expense += -pln;
+        const cn = info?.name ?? 'Без категории';
+        day.cats.set(cn, (day.cats.get(cn) || 0) + -pln);
+      }
+      daily.set(t.date, day);
       // непроставленные разделяем по знаку: расход и доход — в свои секции
       const key = info
         ? `${info.group} / ${info.name}`
@@ -202,11 +273,13 @@ async function summary(from, to, base = 'PLN') {
       const c = cats.get(key);
       c.total += pln;
       c.count++;
-      const pn = pById[t.payee] || t.imported_payee || '—';
-      const pe = c.payees.get(pn) || { sum: 0, count: 0 };
+      // мерчант в разной валюте не слипается — ключ (имя, валюта)
+      const pkey = `${pn} ${cur}`;
+      const pe = c.payees.get(pkey) || { name: pn, currency: cur, sum: 0, native: 0, count: 0 };
       pe.sum += pln;
+      pe.native += t.amount / 100; // сумма в валюте счёта
       pe.count++;
-      c.payees.set(pn, pe);
+      c.payees.set(pkey, pe);
 
       if (!t.category)
         uncategorized.push({ id: t.id, date: t.date, amount: pln, payee: pn, account: a.name });
@@ -217,7 +290,16 @@ async function summary(from, to, base = 'PLN') {
   let cum = 0;
   const series = [...daily.entries()]
     .sort((x, y) => x[0].localeCompare(y[0]))
-    .map(([date, net]) => ({ date, net, cum: (cum += net) }));
+    .map(([date, d]) => ({
+      date,
+      net: d.net,
+      expense: d.expense,
+      cum: (cum += d.net),
+      byCat: [...d.cats.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([name, amount]) => ({ name, amount })),
+    }));
 
   return {
     from,
@@ -231,8 +313,8 @@ async function summary(from, to, base = 'PLN') {
     categories: [...cats.values()]
       .map((c) => ({
         ...c,
-        payees: [...c.payees.entries()]
-          .map(([name, v]) => ({ name, sum: v.sum, count: v.count }))
+        payees: [...c.payees.values()]
+          .map((v) => ({ name: v.name, currency: v.currency, sum: v.sum, native: v.native, count: v.count }))
           .sort((x, y) => x.sum - y.sum),
       }))
       .sort((x, y) => x.total - y.total),
@@ -272,10 +354,11 @@ async function transactions(from, to, base = 'PLN', opts = {}) {
       if (t.is_parent) continue;
       const native = t.amount / 100;
       const amount = toBase(native * (cur === 'PLN' ? 1 : rateAt(RATES[cur], t.date)), t.date);
+      const pn = pById[t.payee] || t.imported_payee || '—';
       out.push({
         id: t.id,
         date: t.date,
-        payee: pById[t.payee] || t.imported_payee || '—',
+        payee: pn,
         account: a.name,
         accountId: a.id,
         currency: cur,
@@ -285,7 +368,7 @@ async function transactions(from, to, base = 'PLN', opts = {}) {
         category: t.category ? catInfo[t.category]?.name : null,
         excluded: t.category ? excluded.has(t.category) : false,
         isTransfer: !!t.transfer_id,
-        startingBalance: !!t.starting_balance_flag,
+        startingBalance: !!t.starting_balance_flag || pn === 'Starting Balance',
         notes: t.notes || '',
       });
     }

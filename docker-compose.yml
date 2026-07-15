@@ -90,8 +90,16 @@ services:
       - ACTUAL_PASSWORD=${ACTUAL_PASSWORD}
       - ACTUAL_BUDGET_SYNC_ID=${ACTUAL_BUDGET_SYNC_ID}
       - EXCLUDED_GROUP=${EXCLUDED_GROUP:-Переводы и обмены}
+      # локальное время контейнера = хост (иначе timestamp'ы бэкапов в UTC ломают ротацию)
+      - TZ=${TZ:-Europe/Warsaw}
+      # бэкап каноничного data/actual в iCloud после каждого успешного банк-синка
+      - BACKUP_SRC=/actual
+      - BACKUP_DIR=/backup
+      - BACKUP_KEEP=${BACKUP_KEEP:-30}
     volumes:
       - ./data/dashboard:/data
+      - ./data/actual:/actual                        # источник снапшота (rw нужен sqlite WAL)
+      - ${ICLOUD_BACKUP_DIR:-./data/backups}:/backup  # куда класть архив (iCloud или локально)
     depends_on:
       actual-server:
         condition: service_healthy

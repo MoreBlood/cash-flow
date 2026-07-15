@@ -1,6 +1,8 @@
 export interface PayeeSum {
   name: string;
+  currency: 'PLN' | 'EUR' | 'USD' | 'CHF';
   sum: number;
+  native: number;
   count: number;
 }
 
@@ -54,7 +56,9 @@ export interface AccountSummary {
 export interface DailyPoint {
   date: string;
   net: number;
+  expense: number;
   cum: number;
+  byCat: { name: string; amount: number }[];
 }
 
 export interface UncategorizedTx {

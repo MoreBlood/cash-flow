@@ -124,7 +124,13 @@ export function DashboardPage() {
         ) : (
           <>
             <KpiCards data={data} prev={prev} />
-            <CashflowChart daily={data.daily} />
+            <CashflowChart
+              daily={data.daily}
+              base={base}
+              catalog={catalog}
+              reloadKey={feedKey}
+              onChanged={refresh}
+            />
             <Grid columns={{ initial: '1', md: '3fr 2fr' }} gap="3">
               <CategoryList
                 categories={data.categories}

@@ -1,4 +1,4 @@
-import { Badge, Box, Card, Flex, Text } from '@radix-ui/themes';
+import { Badge, Box, Card, Flex, Switch, Text } from '@radix-ui/themes';
 import { fetchTransactions } from '@shared/api/client';
 import type { Category, FeedTx } from '@shared/api/types';
 import { categoryStyle } from '@shared/config/categories';
@@ -8,6 +8,9 @@ import { TransactionModal } from './TransactionModal';
 
 const dayLabel = (d: string) =>
   new Date(d).toLocaleDateString('ru', { day: 'numeric', month: 'long', weekday: 'short' });
+
+/** служебная операция — не участвует в расчётах (перевод, обмен, исключённое, стартовый остаток) */
+const isServiceTx = (t: FeedTx) => t.excluded || t.startingBalance;
 
 const nativeFmt = (v: number, cur: string) =>
   new Intl.NumberFormat('pl-PL', {
@@ -44,6 +47,7 @@ export function TransactionFeed({
 }: Props) {
   const [txs, setTxs] = useState<FeedTx[]>([]);
   const [active, setActive] = useState<FeedTx | null>(null);
+  const [hideService, setHideService] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey форсирует рефетч после правок
   useEffect(() => {
@@ -52,24 +56,34 @@ export function TransactionFeed({
       .catch(() => setTxs([]));
   }, [from, to, base, account, limit, reloadKey]);
 
+  const visible = useMemo(
+    () => (hideService ? txs.filter((t) => !isServiceTx(t)) : txs),
+    [txs, hideService],
+  );
   const groups = useMemo(() => {
     const m = new Map<string, FeedTx[]>();
-    for (const t of txs) {
+    for (const t of visible) {
       if (!m.has(t.date)) m.set(t.date, []);
       m.get(t.date)?.push(t);
     }
     return [...m.entries()];
-  }, [txs]);
+  }, [visible]);
 
   return (
     <Card size="3">
-      <Flex justify="between" align="center" mb="2">
+      <Flex justify="between" align="center" mb="2" gap="2" wrap="wrap">
         <Text size="4" weight="bold">
           {title}
         </Text>
-        <Badge color="gray" variant="soft">
-          {txs.length}
-        </Badge>
+        <Flex align="center" gap="2">
+          <Text size="1" color="gray">
+            скрыть служебные
+          </Text>
+          <Switch size="1" checked={hideService} onCheckedChange={setHideService} />
+          <Badge color="gray" variant="soft">
+            {hideService ? `${visible.length} / ${txs.length}` : txs.length}
+          </Badge>
+        </Flex>
       </Flex>
       {groups.map(([date, list]) => (
         <Box key={date} mb="2">
@@ -78,6 +92,8 @@ export function TransactionFeed({
           </Text>
           {list.map((t) => {
             const positive = t.amount >= 0;
+            // стартовые остатки и переводы — не денежный поток: гасим и не красим в зелёный
+            const muted = isServiceTx(t);
             const icon = t.category ? categoryStyle(t.category).icon : positive ? '💰' : '💳';
             return (
               <Flex
@@ -98,7 +114,7 @@ export function TransactionFeed({
                     background: 'var(--gray-4)',
                     fontSize: 18,
                     flexShrink: 0,
-                    opacity: t.excluded ? 0.5 : 1,
+                    opacity: muted ? 0.5 : 1,
                   }}
                 >
                   {icon}
@@ -109,7 +125,7 @@ export function TransactionFeed({
                   </Text>
                   <Text size="1" color="gray" truncate as="div">
                     {t.category ?? 'без категории'}
-                    {t.excluded ? ' · искл.' : ''}
+                    {t.startingBalance ? ' · нач. остаток' : t.excluded ? ' · искл.' : ''}
                   </Text>
                 </Box>
                 <Text
@@ -118,8 +134,8 @@ export function TransactionFeed({
                   style={{
                     fontVariantNumeric: 'tabular-nums',
                     flexShrink: 0,
-                    color: positive ? 'var(--grass-11)' : undefined,
-                    opacity: t.excluded ? 0.5 : 1,
+                    color: positive && !muted ? 'var(--grass-11)' : undefined,
+                    opacity: muted ? 0.5 : 1,
                   }}
                 >
                   {positive ? '+' : ''}

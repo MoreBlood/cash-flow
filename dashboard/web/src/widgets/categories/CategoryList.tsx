@@ -2,7 +2,7 @@ import { CategorySelect } from '@features/categorize/CategorySelect';
 import { Badge, Box, Card, Flex, SegmentedControl, Text } from '@radix-ui/themes';
 import type { Category, CategorySummary } from '@shared/api/types';
 import { categoryStyle } from '@shared/config/categories';
-import { money, moneyExact } from '@shared/lib/format';
+import { getDisplayCurrency, money, moneyExact, moneyIn } from '@shared/lib/format';
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -61,7 +61,19 @@ function CategoryRow({
 }: { cat: CategorySummary; max: number; income?: boolean } & CommonProps) {
   const [open, setOpen] = useState(false);
   const { color } = categoryStyle(cat.name);
+  const base = getDisplayCurrency();
   const sign = (v: number) => (income ? v : -v);
+  // имена, встречающиеся в нескольких валютах — им показываем валюту, чтобы не путать
+  const mixed = useMemo(() => {
+    const seen = new Map<string, string>();
+    const dup = new Set<string>();
+    for (const p of cat.payees) {
+      const prev = seen.get(p.name);
+      if (prev !== undefined && prev !== p.currency) dup.add(p.name);
+      seen.set(p.name, p.currency);
+    }
+    return dup;
+  }, [cat.payees]);
   return (
     <Box>
       <Flex
@@ -99,13 +111,27 @@ function CategoryRow({
       {open && (
         <Box pl="8" pb="2">
           {cat.payees.slice(0, 8).map((p) => (
-            <Flex key={p.name} justify="between" align="center" gap="2" py="1">
-              <Text size="2" color="gray" truncate style={{ flexGrow: 1 }}>
-                {p.name}
-              </Text>
-              <Text size="2" style={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-                {moneyExact(sign(p.sum))}
-              </Text>
+            <Flex key={`${p.name} ${p.currency}`} justify="between" align="center" gap="2" py="1">
+              <Flex align="center" gap="1" style={{ flexGrow: 1, minWidth: 0 }}>
+                <Text size="2" color="gray" truncate>
+                  {p.name}
+                </Text>
+                {mixed.has(p.name) && (
+                  <Badge size="1" variant="soft" color="gray" style={{ flexShrink: 0 }}>
+                    {p.currency}
+                  </Badge>
+                )}
+              </Flex>
+              <Flex direction="column" align="end" style={{ flexShrink: 0 }}>
+                <Text size="2" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {moneyExact(sign(p.sum))}
+                </Text>
+                {p.currency !== base && (
+                  <Text size="1" color="gray" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {moneyIn(sign(p.native), p.currency)}
+                  </Text>
+                )}
+              </Flex>
               <CategorySelect catalog={catalog} payee={p.name} period={period} onDone={onChanged} />
             </Flex>
           ))}
@@ -117,7 +143,9 @@ function CategoryRow({
 
 interface MerchantAgg {
   name: string;
+  currency: 'PLN' | 'EUR' | 'USD' | 'CHF';
   total: number;
+  native: number;
   count: number;
   category: string;
 }
@@ -125,10 +153,11 @@ interface MerchantAgg {
 function MerchantRow({
   m,
   max,
+  showCurrency = false,
   catalog,
   period,
   onChanged,
-}: { m: MerchantAgg; max: number } & CommonProps) {
+}: { m: MerchantAgg; max: number; showCurrency?: boolean } & CommonProps) {
   const [open, setOpen] = useState(false);
   const { color } = categoryStyle(m.category);
   return (
@@ -143,12 +172,26 @@ function MerchantRow({
         <IconCircle name={m.category} />
         <Box flexGrow="1" minWidth="0">
           <Flex justify="between" gap="2">
-            <Text size="3" weight="medium" truncate>
-              {m.name}
-            </Text>
-            <Text size="3" weight="bold" style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {money(m.total)}
-            </Text>
+            <Flex align="center" gap="1" style={{ minWidth: 0 }}>
+              <Text size="3" weight="medium" truncate>
+                {m.name}
+              </Text>
+              {showCurrency && (
+                <Badge size="1" variant="soft" color="gray" style={{ flexShrink: 0 }}>
+                  {m.currency}
+                </Badge>
+              )}
+            </Flex>
+            <Flex direction="column" align="end" style={{ flexShrink: 0 }}>
+              <Text size="3" weight="bold" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {money(m.total)}
+              </Text>
+              {m.currency !== getDisplayCurrency() && (
+                <Text size="1" color="gray" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {moneyIn(m.native, m.currency)}
+                </Text>
+              )}
+            </Flex>
           </Flex>
           <Flex align="center" gap="2" mt="1">
             <Bar value={m.total} max={max} color={color} />
@@ -201,9 +244,13 @@ export function CategoryList({
     for (const c of expenses) {
       for (const p of c.payees) {
         if (p.sum >= 0) continue;
-        const cur = m.get(p.name) ?? {
+        // мерчант в разной валюте — отдельные строки
+        const key = `${p.name} ${p.currency}`;
+        const cur = m.get(key) ?? {
           name: p.name,
+          currency: p.currency,
           total: 0,
+          native: 0,
           count: 0,
           category: c.name,
           best: 0,
@@ -214,13 +261,25 @@ export function CategoryList({
           cur.category = c.name; // категория с наибольшей долей мерчанта
         }
         cur.total += spent;
+        cur.native += -p.native;
         cur.count += p.count;
-        m.set(p.name, cur);
+        m.set(key, cur);
       }
     }
     return [...m.values()].sort((a, b) => b.total - a.total);
   }, [expenses]);
   const maxMerchant = Math.max(...merchants.map((m) => m.total), 1);
+  // имена мерчантов в нескольких валютах — показываем валюту
+  const mixedMerchants = useMemo(() => {
+    const seen = new Map<string, string>();
+    const dup = new Set<string>();
+    for (const m of merchants) {
+      const prev = seen.get(m.name);
+      if (prev !== undefined && prev !== m.currency) dup.add(m.name);
+      seen.set(m.name, m.currency);
+    }
+    return dup;
+  }, [merchants]);
 
   return (
     <Card size="3">
@@ -259,9 +318,10 @@ export function CategoryList({
       {view === 'merchants' &&
         merchants.map((m) => (
           <MerchantRow
-            key={m.name}
+            key={`${m.name} ${m.currency}`}
             m={m}
             max={maxMerchant}
+            showCurrency={mixedMerchants.has(m.name)}
             catalog={catalog}
             period={period}
             onChanged={onChanged}

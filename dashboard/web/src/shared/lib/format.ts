@@ -26,6 +26,24 @@ export const setDisplayCurrency = (c: string) => {
   currency = c;
 };
 
+/** Текущая базовая валюта отображения (валюта расчётов). */
+export const getDisplayCurrency = () => currency;
+
+const inCache = new Map<string, Intl.NumberFormat>();
+/** Форматирует сумму в заданной валюте (для нативной суммы счёта). */
+export const moneyIn = (v: number, cur: string) => {
+  let f = inCache.get(cur);
+  if (!f) {
+    f = new Intl.NumberFormat('pl-PL', {
+      style: 'currency',
+      currency: cur,
+      maximumFractionDigits: 0,
+    });
+    inCache.set(cur, f);
+  }
+  return f.format(v);
+};
+
 export const money = (v: number) => fmts().short.format(v);
 export const moneyExact = (v: number) => fmts().exact.format(v);
 export const signed = (v: number) =>

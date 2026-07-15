@@ -147,13 +147,31 @@ Enable Banking требует **https** в redirect URL, поэтому в ст�
 
 ## Бэкап / восстановление
 
-Все данные — в `./data/actual/`. Остановите стек и заархивируйте каталог:
+Все данные — в `./data/actual/` (обычные SQLite). Есть три пути:
+
+**Автоматически при каждом синке.** После успешного банк-синка дашборд делает
+консистентный снапшот `data/actual` (через SQLite online-backup, без остановки сервера)
+и кладёт архив `actual-<дата>.tgz` в `ICLOUD_BACKUP_DIR`. По умолчанию — iCloud Drive;
+задайте путь в `.env` (`ICLOUD_BACKUP_DIR`, `BACKUP_KEEP` — сколько архивов хранить).
+Работает через bind-mount папки бэкапов в контейнер, поэтому не упирается в ограничения
+macOS для фоновых процессов.
+
+**Вручную в любой момент:**
 
 ```bash
-docker compose stop actual-server
-tar czf ~/cash-flow-backup-$(date +%F).tgz -C . data/actual
-docker compose start actual-server
+./cashflow.sh backup      # снапшот data/actual в ICLOUD_BACKUP_DIR (с ротацией)
 ```
+
+**Восстановление:** остановите стек, распакуйте архив в `data/actual`, поднимите заново:
+
+```bash
+docker compose down
+tar xzf "<путь>/actual-YYYYMMDD-HHMMSS.tgz" -C data/actual
+./cashflow.sh
+```
+
+> ⚠️ Живую БД SQLite нельзя синкать облаком напрямую (WAL + дозапись = битый бэкап).
+> Поэтому бэкапится **снапшот**, а не рабочая папка — не кладите `data/` в iCloud «как есть».
 
 ## Приватность
 
