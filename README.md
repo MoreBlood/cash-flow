@@ -22,7 +22,6 @@ LLM-провайдера категоризации (при локальном O
 | Синк банков по расписанию | [`seriouslag/actual-auto-sync`](https://github.com/seriouslag/actual-auto-sync) | — |
 | Автокатегоризация (опц.) | [`sakowicz/actual-ai`](https://github.com/sakowicz/actual-ai) | — |
 | **Свой дашборд** | `dashboard/` (React + Radix + Vite) | 5055 |
-| Дашборды (опц.) | Prometheus + Grafana + [exporter](https://github.com/sakowicz/actual-budget-prometheus-exporter) | 3000 |
 
 Банковский синк — через **Enable Banking** (встроен в Actual; GoCardless/Nordigen
 закрыт для новых регистраций). Аналитику словами можно подключить через
@@ -129,8 +128,6 @@ Enable Banking требует **https** в redirect URL, поэтому в ст�
 
 - **Автокатегоризация** (`actual-ai`, профиль `ai`): выберите LLM-провайдера в `.env`
   (`LLM_PROVIDER` + ключи). Локально — LM Studio/Ollama (данные не покидают машину).
-- **Grafana-дашборды** (профиль `dashboards`): http://localhost:3000, дашборд
-  предзагружен через provisioning.
 - **Аналитика словами через Claude**: подключите
   [`s-stefanov/actual-mcp`](https://github.com/s-stefanov/actual-mcp) как MCP-сервер.
 
@@ -185,7 +182,7 @@ tar xzf "<iCloud>/actual-YYYYMMDD-HHMMSS.tgz" -C data/actual
 ```
 
 Дальше в Actual один раз переподтвердите согласие Enable Banking (PSD2 живёт ~90 дней) —
-ключ `.pem` и App ID уже на месте из бандла.
+ключ `.pem` и App ID уже на месте из бандла. Пошаговая памятка — **[RESTORE.md](RESTORE.md)**.
 
 > ⚠️ Живую БД SQLite нельзя синкать облаком напрямую (WAL + дозапись = битый бэкап).
 > Поэтому в облако едет **снапшот** (`.backup`), а не рабочая папка — не кладите `data/`

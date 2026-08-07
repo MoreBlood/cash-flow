@@ -1,6 +1,7 @@
 import { AlertDialog, Button, Flex, Select, Text } from '@radix-ui/themes';
 import { type CategorizePayload, categorize } from '@shared/api/client';
 import type { Category } from '@shared/api/types';
+import { categoryStyle } from '@shared/config/categories';
 import { useMemo, useState } from 'react';
 
 interface Props {
@@ -58,7 +59,7 @@ export function CategorySelect({ catalog, txId, payee, period, onDone }: Props) 
               <Select.Label>{group}</Select.Label>
               {cats.map((c) => (
                 <Select.Item key={c.id} value={c.id}>
-                  {c.name}
+                  {categoryStyle(c.name).icon} {c.name}
                 </Select.Item>
               ))}
             </Select.Group>

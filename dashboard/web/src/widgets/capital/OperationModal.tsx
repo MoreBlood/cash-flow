@@ -1,6 +1,7 @@
 import { Button, Dialog, Flex, SegmentedControl, Select, Text, TextField } from '@radix-ui/themes';
 import { addOperation, addTransfer } from '@shared/api/client';
 import type { AccountRef, Category } from '@shared/api/types';
+import { categoryStyle } from '@shared/config/categories';
 import { useEffect, useMemo, useState } from 'react';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -136,7 +137,7 @@ export function OperationModal({
                         <Select.Label>{group}</Select.Label>
                         {cats.map((c) => (
                           <Select.Item key={c.id} value={c.id}>
-                            {c.name}
+                            {categoryStyle(c.name).icon} {c.name}
                           </Select.Item>
                         ))}
                       </Select.Group>

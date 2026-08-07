@@ -13,6 +13,7 @@ import {
 } from '@radix-ui/themes';
 import { fetchAccounts, fetchCategories, fetchSettings, saveSettings } from '@shared/api/client';
 import type { AccountRef, Category, Settings } from '@shared/api/types';
+import { categoryStyle } from '@shared/config/categories';
 import { useEffect, useMemo, useState } from 'react';
 
 const CURRENCIES = ['PLN', 'USD', 'EUR', 'CHF'];
@@ -37,7 +38,7 @@ function CategoryPicker({
             <Select.Label>{group}</Select.Label>
             {cats.map((c) => (
               <Select.Item key={c.id} value={c.id}>
-                {c.name}
+                {categoryStyle(c.name).icon} {c.name}
               </Select.Item>
             ))}
           </Select.Group>

@@ -44,7 +44,6 @@ show_urls() {
   bold "Адреса:"
   echo "  Дашборд:      http://localhost:5055   (Cash Flow + Капитал)"
   echo "  Actual:       http://localhost:5006   (https://localhost:5443 — для привязки банков)"
-  echo "  Grafana:      http://localhost:3000"
 }
 
 case "${1:-start}" in
@@ -54,7 +53,6 @@ case "${1:-start}" in
     docker compose up -d --quiet-pull 2>&1 | grep -Ev "Running|Created$" || true
     wait_http http://localhost:5006 "actual-server :5006"
     wait_http http://localhost:5055/api/meta "dashboard :5055" 60
-    wait_http http://localhost:3000/api/health "grafana :3000"
     show_urls
     echo
     docker compose ps --format 'table {{.Name}}\t{{.Status}}'

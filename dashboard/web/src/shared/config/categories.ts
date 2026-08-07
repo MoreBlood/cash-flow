@@ -19,6 +19,7 @@ const STYLES: Record<string, CategoryStyle> = {
   Семья: { icon: '👨‍👩‍👧', color: 'var(--crimson-9)' },
   Друзья: { icon: '🤝', color: 'var(--yellow-9)' },
   Доход: { icon: '💰', color: 'var(--grass-9)' },
+  Питомцы: { icon: '🐾', color: 'var(--orange-11)' },
   'Без категории': { icon: '❓', color: 'var(--gray-8)' },
 };
 
