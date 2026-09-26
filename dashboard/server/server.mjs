@@ -98,11 +98,21 @@ async function runBankSync() {
   if (bankSyncing) return { alreadyRunning: true, ...readSyncState() };
   bankSyncing = true;
   try {
-    await api.runBankSync();
+    // @actual-app/api синкает ВСЕ счета, копит ошибки и бросает первую в самом конце —
+    // уже после того, как транзакции импортированы. Поэтому ошибку запоминаем,
+    // иначе один сбойный счёт молча отменяет и отметку времени, и бэкап в iCloud.
+    let warning = null;
+    try {
+      await api.runBankSync();
+    } catch (e) {
+      warning = e?.message || String(e);
+      console.error('[bank-sync] частичная ошибка (импорт мог пройти):', warning);
+    }
     await api.sync();
     lastSync = Date.now();
     const state = { lastBankSyncAt: new Date().toISOString() };
     await writeFile(SYNC_STATE, JSON.stringify(state)).catch(() => {});
+    if (warning) state.warning = warning;
     // копия в iCloud — не валим синк, если бэкап не удался
     const arc = await backupToICloud().catch((e) => {
       console.error('[backup] не удалось:', e?.message || e);
