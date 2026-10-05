@@ -8,7 +8,7 @@
         "run",
         "dev",
         "--prefix",
-        "dashboard/web"
+        "web"
       ],
       "port": 5173
     }

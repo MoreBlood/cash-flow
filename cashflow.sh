@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Управление cashflow одной командой. Сервер — нативный Node под launchd (без Docker).
+# Управление локальной установкой cashflow. Сервер — Node + TypeScript (src/local.ts) под launchd.
+# Облачная установка (Vercel) управляется из панели Vercel — см. DEPLOY.md.
 #   ./cashflow.sh install       — собрать фронт, прописать launchd-агент и запустить (старт при входе в систему)
 #   ./cashflow.sh               — то же, что status
 #   ./cashflow.sh start|stop|restart
 #   ./cashflow.sh status        — состояние агента, синка и согласий банков
 #   ./cashflow.sh logs          — лог сервера (tail -f)
-#   ./cashflow.sh build         — пересобрать фронтенд (сервер отдаёт его с диска, рестарт не нужен)
+#   ./cashflow.sh build         — пересобрать фронтенд в public/ (сервер отдаёт его с диска, рестарт не нужен)
 #   ./cashflow.sh dev           — Vite :5173 с hot-reload поверх сервера :5055
 #   ./cashflow.sh sync          — банк-синк сейчас
 #   ./cashflow.sh backup        — снапшот базы в ICLOUD_BACKUP_DIR (авто — после каждого синка)
@@ -45,20 +46,23 @@ wait_http() {
   return 1
 }
 
+deps() {
+  npm ci --no-fund --no-audit >/dev/null
+  npm ci --prefix web --no-fund --no-audit >/dev/null
+  ok "зависимости установлены"
+}
+
 build_web() {
-  if [ ! -d dashboard/web/node_modules ]; then
-    warn "ставлю зависимости фронтенда..."
-    npm ci --prefix dashboard/web --no-fund --no-audit
-  fi
-  npm run build --prefix dashboard/web >/dev/null
-  ok "фронтенд собран → dashboard/web/dist"
+  [ -d web/node_modules ] || deps
+  npm run build --prefix web >/dev/null
+  ok "фронтенд собран → public/"
 }
 
 write_plist() {
   local node
-  node="$(command -v node)" || { echo "нужен Node.js ≥ 22.16"; exit 1; }
-  "$node" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=16)?0:1)' \
-    || { echo "нужен Node.js ≥ 22.16 (встроенный node:sqlite), сейчас $("$node" -v)"; exit 1; }
+  node="$(command -v node)" || { echo "нужен Node.js ≥ 22.18"; exit 1; }
+  "$node" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=18)?0:1)' \
+    || { echo "нужен Node.js ≥ 22.18 (запуск TypeScript без сборки), сейчас $("$node" -v)"; exit 1; }
   mkdir -p "$(dirname "$PLIST")" data/logs
   cat >"$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -70,7 +74,7 @@ write_plist() {
   <array>
     <string>$node</string>
     <string>--disable-warning=ExperimentalWarning</string>
-    <string>$ROOT/dashboard/server/server.mjs</string>
+    <string>$ROOT/src/local.ts</string>
   </array>
   <key>WorkingDirectory</key><string>$ROOT</string>
   <key>RunAtLoad</key><true/>
@@ -103,9 +107,13 @@ status() {
 case "${1:-status}" in
   install)
     bold "Установка cashflow"
+    deps
     build_web
     write_plist
-    loaded && launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    if loaded; then
+      launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+      for _ in $(seq 1 20); do loaded || break; sleep 0.5; done   # выгрузка асинхронная
+    fi
     launchctl bootstrap "$DOMAIN" "$PLIST"
     wait_http
     ;;
@@ -133,9 +141,9 @@ case "${1:-status}" in
   dev)
     bold "Dev-режим фронтенда (Vite проксирует /api на :5055)"
     curl -s -o /dev/null --max-time 2 "$URL/api/meta" || "$0" start
-    [ -d dashboard/web/node_modules ] || npm ci --prefix dashboard/web --no-fund --no-audit
+    [ -d web/node_modules ] || deps
     ok "Vite → http://localhost:5173  (Ctrl+C для выхода)"
-    exec npm run dev --prefix dashboard/web
+    exec npm run dev --prefix web
     ;;
   sync)
     bold "Банк-синк"

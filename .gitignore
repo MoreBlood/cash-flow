@@ -7,7 +7,8 @@ personal/
 
 # --- Сборки и зависимости ---
 node_modules/
-dashboard/web/dist/
+public/
+.vercel/
 *.tsbuildinfo
 
 # --- Локальные настройки инструментов ---
@@ -17,3 +18,6 @@ dashboard/web/dist/
 
 # Экспортированные банковские выписки и т.п.
 *.csv
+
+# временные проверки
+.scratch/

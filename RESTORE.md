@@ -4,7 +4,7 @@
 
 ## Где что лежит
 
-- **Код и история** — приватный репозиторий GitHub `MoreBlood/cash-flow`.
+- **Код и история** — репозиторий GitHub `MoreBlood/cash-flow`.
 - **Данные, секреты, личное** — в iCloud Drive:
   `~/Library/Mobile Documents/com~apple~CloudDocs/CashFlow/`
   - `cashflow-full-<дата>.tgz` — **полный бандл**: `data/cashflow.sqlite` + `.env` +
@@ -17,7 +17,7 @@
 
 ## Что нужно на новой машине
 
-- macOS + **Node.js ≥ 22.16** (например, `nvm install 22`).
+- macOS + **Node.js ≥ 22.18** (например, `nvm install 22`).
 - Доступ к GitHub (`gh auth login`).
 - iCloud Drive под своим Apple ID; дождаться, пока папка `CashFlow` скачается
   (файлы должны быть на диске, а не «в облаке»).
@@ -69,6 +69,6 @@ ls .env secrets/*.pem personal/
 ## Если что-то не поднялось
 
 - `./cashflow.sh logs` — лог сервера; `./cashflow.sh restart` — перезапуск.
-- «нужен Node.js ≥ 22.16» → обнови Node и снова `./cashflow.sh install` (путь к node
+- «нужен Node.js ≥ 22.18» → обнови Node и снова `./cashflow.sh install` (путь к node
   прописывается в launchd-агент при установке).
 - Порт 5055/5443 занят → `lsof -i :5055`, освободить и `./cashflow.sh restart`.
