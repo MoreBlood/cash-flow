@@ -68,17 +68,31 @@ function buildServer(s: Service) {
 
   tool('list_categories', 'Категории с группами и числом операций.', z.object({}), read, () => s.categories());
   tool('list_accounts', 'Открытые счета: id, имя, валюта, вне бюджета ли.', z.object({}), read, () => s.accounts());
-  tool('get_balances', 'Балансы всех счетов и итог в базовой валюте по свежему курсу НБП.', z.object({ base }), read, ({ base: b }) =>
-    s.balances(b),
+  // поля API для дашборда называются *Pln исторически; агенту отдаём однозначные имена
+  tool(
+    'get_balances',
+    'Балансы всех счетов (balance — в валюте счёта, inBase — в базовой валюте) и итог total в базовой валюте по свежему курсу НБП.',
+    z.object({ base }),
+    read,
+    async ({ base: b }) => {
+      const r = await s.balances(b);
+      return {
+        base: r.base,
+        total: r.totalPln,
+        ratesToPln: r.rates,
+        accounts: r.accounts.map(({ balancePln, ...a }) => ({ ...a, inBase: balancePln })),
+      };
+    },
   );
   tool(
     'get_networth_history',
-    'История капитала по дням в базовой валюте.',
+    'История капитала по дням: total — сумма всех счетов в базовой валюте base.',
     z.object({ base, from: date.optional().describe('С какой даты отдавать точки') }),
     read,
     async ({ base: b, from }) => {
       const h = await s.networthHistory(b);
-      return { ...h, series: from ? h.series.filter((p) => p.date >= from) : h.series };
+      const series = from ? h.series.filter((p) => p.date >= from) : h.series;
+      return { base: h.base, series: series.map((p) => ({ date: p.date, total: p.totalPln })) };
     },
   );
 
