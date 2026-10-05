@@ -111,6 +111,8 @@ export interface SyncStatus {
   failedAccounts?: string[];
   /** согласия банков, которые кончились или кончатся в ближайшие 14 дней */
   expiring?: { bank: string; consentUntil: string }[];
+  /** сколько счетов привязано к банку (0 — новая установка) */
+  linked?: number;
   syncing: boolean;
 }
 

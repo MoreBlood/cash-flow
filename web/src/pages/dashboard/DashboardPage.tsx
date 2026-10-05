@@ -9,7 +9,13 @@ import {
   prevPeriod,
 } from '@features/period/PeriodPicker';
 import { Box, Container, Flex, Grid, Spinner, Text } from '@radix-ui/themes';
-import { fetchCategories, fetchMeta, fetchSummary, REFRESH_EVENT } from '@shared/api/client';
+import {
+  fetchAccounts,
+  fetchCategories,
+  fetchMeta,
+  fetchSummary,
+  REFRESH_EVENT,
+} from '@shared/api/client';
 import type { Category, Meta, Summary } from '@shared/api/types';
 import { AccountsTable } from '@widgets/accounts/AccountsTable';
 import { CategoryList } from '@widgets/categories/CategoryList';
@@ -18,6 +24,7 @@ import { DonutChart } from '@widgets/chart/DonutChart';
 import { TransactionFeed } from '@widgets/feed/TransactionFeed';
 import { KpiCards } from '@widgets/kpi/KpiCards';
 import { TopMerchants } from '@widgets/merchants/TopMerchants';
+import { WelcomeCard } from '@widgets/onboarding/WelcomeCard';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -31,6 +38,7 @@ export function DashboardPage() {
   const [catalog, setCatalog] = useState<Category[]>([]);
   const [feedKey, setFeedKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [empty, setEmpty] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: читаем query один раз при монтировании
   useEffect(() => {
@@ -44,6 +52,9 @@ export function DashboardPage() {
     fetchCategories()
       .then(setCatalog)
       .catch(() => setCatalog([]));
+    fetchAccounts()
+      .then((a) => setEmpty(a.length === 0))
+      .catch(() => {});
   }, []);
 
   const changePeriod = (p: Period) => {
@@ -101,6 +112,13 @@ export function DashboardPage() {
     return (
       <Container size="2" py="9">
         <Text color="red">Ошибка: {error}</Text>
+      </Container>
+    );
+
+  if (empty)
+    return (
+      <Container size="3" px={{ initial: '3', sm: '4' }} py="6">
+        <WelcomeCard />
       </Container>
     );
 

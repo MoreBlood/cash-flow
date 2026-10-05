@@ -331,6 +331,16 @@ export async function banksView(db: Db) {
   return [...banks.values()];
 }
 
+/** Сколько открытых счетов привязано к банку. */
+export const linkedAccounts = async (db: Db) =>
+  (
+    await db
+      .select({ n: count() })
+      .from(accounts)
+      .where(and(eq(accounts.closed, false), isNotNull(accounts.ebAccountId)))
+      .get()
+  )?.n ?? 0;
+
 /** Согласия, которые кончились или кончатся в ближайшие 14 дней. */
 export const expiringConsents = async (db: Db) =>
   (await banksView(db))

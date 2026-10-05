@@ -8,6 +8,7 @@ export function SyncButton() {
   const [lastAt, setLastAt] = useState<string | null>(null);
   const [failed, setFailed] = useState<string[]>([]);
   const [expiring, setExpiring] = useState<NonNullable<SyncStatus['expiring']>>([]);
+  const [linked, setLinked] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(false);
@@ -19,6 +20,7 @@ export function SyncButton() {
         setLastAt(s.lastBankSyncAt);
         setFailed(s.failedAccounts ?? []);
         setExpiring(s.expiring ?? []);
+        setLinked(s.linked ?? null);
         setSyncing(s.syncing);
       })
       .catch(() => {});
@@ -61,6 +63,12 @@ export function SyncButton() {
         <Text size="1" color="red">
           ошибка синка
         </Text>
+      );
+    if (linked === 0)
+      return (
+        <Link size="1" asChild>
+          <RouterLink to="/banks">подключить банк</RouterLink>
+        </Link>
       );
     if (failed.length)
       return (

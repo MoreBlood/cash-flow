@@ -55,6 +55,7 @@ export function createService(db: Db, opts: { onSyncDone?: (s: sync.SyncState) =
       ...(await sync.syncState(db)),
       syncing: await sync.isSyncing(db),
       expiring: await sync.expiringConsents(db),
+      linked: await sync.linkedAccounts(db),
     }),
     banks: () => sync.banksView(db),
     aspsps: withEb(async (country: string = 'PL') =>

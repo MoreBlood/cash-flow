@@ -13,7 +13,17 @@ import { CapitalPage } from '@pages/capital/CapitalPage';
 import { DashboardPage } from '@pages/dashboard/DashboardPage';
 import { SettingsPage } from '@pages/settings/SettingsPage';
 import { SetupPage } from '@pages/setup/SetupPage';
-import { Box, Container, Flex, Heading, IconButton, Select, TabNav, Theme } from '@radix-ui/themes';
+import {
+  Box,
+  Container,
+  Flex,
+  Heading,
+  IconButton,
+  Select,
+  Spinner,
+  TabNav,
+  Theme,
+} from '@radix-ui/themes';
 import { fetchSetup, type Setup } from '@shared/api/client';
 import { authClient } from '@shared/auth/client';
 import { useEffect, useState } from 'react';
@@ -92,7 +102,12 @@ function SetupGate({ children }: { children: React.ReactNode }) {
       .then(setSetup)
       .catch(() => setSetup(null));
   }, []);
-  if (setup === undefined) return null;
+  if (setup === undefined)
+    return (
+      <Flex justify="center" align="center" style={{ minHeight: '60vh' }}>
+        <Spinner size="3" />
+      </Flex>
+    );
   if (setup && !setup.authConfigured) return <SetupPage setup={setup} />;
   return <>{children}</>;
 }

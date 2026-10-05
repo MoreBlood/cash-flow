@@ -1,6 +1,6 @@
 import { AlertDialog, Button, Card, Flex, Heading, Text } from '@radix-ui/themes';
 import { emitRefresh, importData } from '@shared/api/client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Parsed = { data: unknown; accounts: number; transactions: number };
 
@@ -10,6 +10,11 @@ export function DataTransferCard() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  // ссылка «Перенести данные» с дашборда ведёт сюда (#transfer)
+  useEffect(() => {
+    if (window.location.hash === '#transfer') ref.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
   const pick = (file?: File) => {
     if (!file) return;
@@ -47,7 +52,7 @@ export function DataTransferCard() {
   };
 
   return (
-    <Card size="3">
+    <Card size="3" ref={ref} id="transfer">
       <Heading size="4" mb="1">
         Перенос данных
       </Heading>

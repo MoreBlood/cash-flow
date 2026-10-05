@@ -174,9 +174,9 @@ export function SettingsPage() {
         </Card>
 
         {setup && <McpCard setup={setup} />}
+        <DataTransferCard />
         <CategoriesCard catalog={catalog} onChanged={loadCatalog} />
         <RulesCard catalog={catalog} />
-        <DataTransferCard />
       </Flex>
     </Container>
   );

@@ -44,10 +44,12 @@ export const moneyIn = (v: number, cur: string) => {
   return f.format(v);
 };
 
-export const money = (v: number) => fmts().short.format(v);
-export const moneyExact = (v: number) => fmts().exact.format(v);
+// без «-0 zł»: округлённый до нуля минус не показываем
+const z = (v: number) => (Math.abs(v) < 0.005 ? 0 : v);
+export const money = (v: number) => fmts().short.format(z(v));
+export const moneyExact = (v: number) => fmts().exact.format(z(v));
 export const signed = (v: number) =>
-  v > 0 ? `+${fmts().short.format(v)}` : fmts().short.format(v);
+  z(v) > 0 ? `+${fmts().short.format(v)}` : fmts().short.format(z(v));
 
 export const monthLabel = (ym: string) =>
   new Date(`${ym}-01`).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
