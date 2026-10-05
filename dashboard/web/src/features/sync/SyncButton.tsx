@@ -1,14 +1,13 @@
 import { Button, Flex, Link, Spinner, Text, Tooltip } from '@radix-ui/themes';
-import { emitRefresh, fetchSyncStatus, triggerBankSync } from '@shared/api/client';
+import { emitRefresh, fetchSyncStatus, type SyncStatus, triggerBankSync } from '@shared/api/client';
 import { relativeTime } from '@shared/lib/format';
 import { useEffect, useRef, useState } from 'react';
-
-/** Actual по https — нужен для переподключения банков (redirect Enable Banking) */
-const ACTUAL_RELINK_URL = 'https://localhost:5443';
+import { Link as RouterLink } from 'react-router-dom';
 
 export function SyncButton() {
   const [lastAt, setLastAt] = useState<string | null>(null);
   const [failed, setFailed] = useState<string[]>([]);
+  const [expiring, setExpiring] = useState<NonNullable<SyncStatus['expiring']>>([]);
   const [syncing, setSyncing] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(false);
@@ -19,6 +18,7 @@ export function SyncButton() {
       .then((s) => {
         setLastAt(s.lastBankSyncAt);
         setFailed(s.failedAccounts ?? []);
+        setExpiring(s.expiring ?? []);
         setSyncing(s.syncing);
       })
       .catch(() => {});
@@ -65,13 +65,29 @@ export function SyncButton() {
     if (failed.length)
       return (
         <Tooltip
-          content={`Не синкаются: ${failed.join(', ')}. Чаще всего это истёкшее согласие банка (PSD2, ~90 дней) — переподключи счета в Actual.`}
+          content={`Не синкаются: ${failed.join(', ')}. Чаще всего это истёкшее согласие банка — переподключи на странице «Банки».`}
         >
-          <Link size="1" color="amber" href={ACTUAL_RELINK_URL} target="_blank" rel="noreferrer">
-            ⚠ не синкаются: {failed.length}
+          <Link size="1" color="amber" asChild>
+            <RouterLink to="/banks">⚠ не синкаются: {failed.length}</RouterLink>
           </Link>
         </Tooltip>
       );
+    if (expiring.length) {
+      const days = Math.min(
+        ...expiring.map((e) =>
+          Math.floor((new Date(e.consentUntil).getTime() - Date.now()) / 864e5),
+        ),
+      );
+      return (
+        <Tooltip
+          content={`Согласие кончается: ${expiring.map((e) => `${e.bank} — ${new Date(e.consentUntil).toLocaleDateString('ru')}`).join(', ')}`}
+        >
+          <Link size="1" color="amber" asChild>
+            <RouterLink to="/banks">⚠ согласие: {Math.max(days, 0)} дн.</RouterLink>
+          </Link>
+        </Tooltip>
+      );
+    }
     return (
       <Text size="1" color="gray">
         {relativeTime(lastAt)}

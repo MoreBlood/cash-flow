@@ -10,7 +10,10 @@ export interface Category {
   id: string;
   name: string;
   group: string;
+  groupId: string;
   isIncome: boolean;
+  /** операций в категории */
+  count: number;
 }
 
 export interface FeedTx {
@@ -28,6 +31,10 @@ export interface FeedTx {
   isTransfer: boolean;
   startingBalance?: boolean;
   notes: string;
+  /** заведена вручную (не из банка): можно менять дату/сумму и удалять */
+  manual: boolean;
+  /** банк ещё не провёл */
+  pending: boolean;
 }
 
 export interface TransactionsResponse {
@@ -115,7 +122,50 @@ export interface Settings {
   excludedGroup: string;
   transferCategoryId: string | null;
   excludeCategoryId: string | null;
-  accountCurrencies: Record<string, string>;
+}
+
+export interface BankAccount {
+  id: string;
+  name: string;
+  currency: string;
+  iban: string | null;
+  bankBalance: number | null;
+  syncedAt: string | null;
+  /** 'login_required' — согласие кончилось; иначе текст ошибки */
+  error: string | null;
+}
+
+export interface Bank {
+  name: string;
+  consentUntil: string | null;
+  /** срок известен примерно (привязка была через Actual) */
+  estimated: boolean;
+  accounts: BankAccount[];
+}
+
+export interface Aspsp {
+  name: string;
+  country: string;
+  maxConsentDays: number;
+}
+
+export type RuleField = 'payee' | 'imported_payee' | 'notes';
+export type RuleOp = 'is' | 'contains' | 'oneOf';
+
+export interface RuleCondition {
+  field: RuleField;
+  op: RuleOp;
+  value: string | string[];
+}
+
+export interface Rule {
+  id: string;
+  conditionsOp: 'and' | 'or';
+  conditions: RuleCondition[];
+  categoryId: string;
+  category: string | null;
+  /** сколько операций из истории подпадает */
+  matches: number;
 }
 
 export interface NetWorthPoint {

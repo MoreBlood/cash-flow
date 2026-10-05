@@ -1,308 +1,163 @@
-import * as api from '@actual-app/api';
-import Database from 'better-sqlite3';
-import { execFile } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, extname, join, normalize, relative } from 'node:path';
+import { createServer as createHttpsServer } from 'node:https';
+import { homedir } from 'node:os';
+import { extname, join, normalize } from 'node:path';
+import { backupDb } from './backup.mjs';
+import { DEFAULT_DB_PATH, kvGet, kvSet, newId, openDb, tx } from './db.mjs';
+import { eb, ebConfigured } from './eb.mjs';
+import { BASES, converter, latestRates, nbpRange, rateAt, shiftDays, today } from './fx.mjs';
+import { categoryFor, loadRules, ruleMatches, validateConditions } from './rules.mjs';
+import { banksView, completeConnect, isSyncing, runBankSync, startConnect } from './sync.mjs';
 
-// dev-фолбэк: подтянуть недостающие переменные из .env в корне репозитория
-if (!process.env.ACTUAL_PASSWORD) {
-  const envPath = new URL('../../.env', import.meta.url).pathname;
-  if (existsSync(envPath)) {
-    for (const line of readFileSync(envPath, 'utf8').split('\n')) {
-      if (!line || line.startsWith('#') || !line.includes('=')) continue;
-      const k = line.slice(0, line.indexOf('=')).trim();
-      const v = line.slice(line.indexOf('=') + 1).trim();
-      if (!process.env[k]) process.env[k] = v;
-    }
-    process.env.ACTUAL_SERVER_URL ||= 'http://localhost:5006';
-    process.env.DATA_DIR ||= new URL('./data-cache', import.meta.url).pathname;
+// переменные из .env в корне репозитория (то, что не задано окружением)
+const envPath = new URL('../../.env', import.meta.url).pathname;
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+    if (!line || line.startsWith('#') || !line.includes('=')) continue;
+    const k = line.slice(0, line.indexOf('=')).trim();
+    const v = line
+      .slice(line.indexOf('=') + 1)
+      .trim()
+      .replace(/^(['"])(.*)\1$/, '$2')
+      .replaceAll('$HOME', homedir());
+    if (!process.env[k]) process.env[k] = v;
   }
 }
+process.env.BACKUP_DIR ||= process.env.ICLOUD_BACKUP_DIR;
 
 const PORT = Number(process.env.PORT || 5055);
-const STATIC_DIR = process.env.STATIC_DIR || './public';
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 5443); // для колбэка Enable Banking (нужен https)
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+const ROOT = new URL('../../', import.meta.url).pathname;
+const STATIC_DIR = process.env.STATIC_DIR || new URL('../web/dist', import.meta.url).pathname;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-// --- Actual session -------------------------------------------------------
-let lastSync = 0;
-async function ensureBudget() {
-  if (Date.now() - lastSync < 60_000) return;
-  await api.sync();
-  lastSync = Date.now();
-}
+const db = openDb();
+console.log('db:', process.env.DB_PATH || DEFAULT_DB_PATH);
 
-// --- Bank sync state (persisted) ------------------------------------------
-const SYNC_STATE = join(process.env.DATA_DIR || '/data', 'last-bank-sync.json');
-let bankSyncing = false;
-function readSyncState() {
-  try {
-    return JSON.parse(readFileSync(SYNC_STATE, 'utf8'));
-  } catch {
-    return { lastBankSyncAt: null };
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
   }
 }
-// --- Бэкап в iCloud после успешного синка ---------------------------------
-const BACKUP_SRC = process.env.BACKUP_SRC; // /actual (bind-mount data/actual)
-const BACKUP_DIR = process.env.BACKUP_DIR; // /backup (bind-mount iCloud)
-const BACKUP_KEEP = Number(process.env.BACKUP_KEEP || 30);
+const bad = (msg) => new HttpError(400, msg);
 
-function backupStamp() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
+// --- справочники ------------------------------------------------------------
+const SETTINGS_DEFAULT = { excludedGroup: 'Переводы и обмены', transferCategoryId: null, excludeCategoryId: null };
+const getSettings = () => ({ ...SETTINGS_DEFAULT, ...kvGet(db, 'settings', {}) });
 
-// Консистентный снапшот BACKUP_SRC → BACKUP_DIR/actual-<ts>.tgz (best-effort).
-// sqlite копируем через online-backup (консистентно при живом actual-server), остальное — как есть.
-async function backupToICloud() {
-  if (!BACKUP_DIR || !BACKUP_SRC || !existsSync(BACKUP_SRC)) return null;
-  const stage = join('/tmp', `bk-${Date.now()}`);
-  const walk = (dir) =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
-    );
-  try {
-    for (const f of walk(BACKUP_SRC)) {
-      if (f.endsWith('.sqlite-wal') || f.endsWith('.sqlite-shm')) continue;
-      const dest = join(stage, relative(BACKUP_SRC, f));
-      mkdirSync(dirname(dest), { recursive: true });
-      if (f.endsWith('.sqlite')) {
-        const db = new Database(f);
-        try {
-          await db.backup(dest);
-        } finally {
-          db.close();
-        }
-      } else {
-        copyFileSync(f, dest);
-      }
-    }
-    const arc = join(BACKUP_DIR, `actual-${backupStamp()}.tgz`);
-    await new Promise((res, rej) =>
-      execFile('tar', ['czf', arc, '-C', stage, '.'], (e) => (e ? rej(e) : res())),
-    );
-    // ротация: оставить последние BACKUP_KEEP архивов
-    const arcs = readdirSync(BACKUP_DIR)
-      .filter((f) => f.startsWith('actual-') && f.endsWith('.tgz'))
-      .sort()
-      .reverse();
-    for (const old of arcs.slice(BACKUP_KEEP)) rmSync(join(BACKUP_DIR, old), { force: true });
-    return arc;
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
-  }
-}
-
-async function runBankSync() {
-  if (bankSyncing) return { alreadyRunning: true, ...readSyncState() };
-  bankSyncing = true;
-  try {
-    // Синкаем по одному счёту: пакетный api.runBankSync() бросает только первую ошибку,
-    // и по ней не отличить один сбойный счёт от «упали все» (истёкшее согласие PSD2).
-    const failedAccounts = [];
-    for (const a of await api.getAccounts()) {
-      if (a.closed) continue;
-      try {
-        await api.runBankSync({ accountId: a.id });
-      } catch (e) {
-        failedAccounts.push(a.name);
-        console.error(`[bank-sync] ${a.name}:`, e?.message || e);
-      }
-    }
-    await api.sync();
-    lastSync = Date.now();
-    const now = new Date().toISOString();
-    // «обновлено» — только когда синкнулось всё; при сбое прошлую отметку не трогаем,
-    // а список упавших счетов показываем в шапке
-    const state = {
-      lastBankSyncAt: failedAccounts.length ? (readSyncState().lastBankSyncAt ?? null) : now,
-      lastAttemptAt: now,
-      failedAccounts,
-    };
-    await writeFile(SYNC_STATE, JSON.stringify(state)).catch(() => {});
-    // копия в iCloud — не валим синк, если бэкап не удался
-    const arc = await backupToICloud().catch((e) => {
-      console.error('[backup] не удалось:', e?.message || e);
-      return null;
-    });
-    if (arc) console.log('[backup] снапшот в iCloud:', arc);
-    return state;
-  } finally {
-    bankSyncing = false;
-  }
-}
-
-await api.init({
-  dataDir: process.env.DATA_DIR || '/data',
-  serverURL: process.env.ACTUAL_SERVER_URL,
-  password: process.env.ACTUAL_PASSWORD,
-});
-await api.downloadBudget(process.env.ACTUAL_BUDGET_SYNC_ID);
-lastSync = Date.now();
-console.log('budget loaded');
-
-// --- NBP rates (chunked, cached) ------------------------------------------
-const ratesCache = new Map();
-async function nbpRange(code, from, to) {
-  // НБП отвечает 400 на будущие даты — зажимаем конец диапазона сегодняшним днём,
-  // для будущих дат rateAt протягивает последний известный курс.
-  const today = new Date().toISOString().slice(0, 10);
-  if (to > today) to = today;
-  if (from > to) from = to;
-  const key = `${code}:${from}:${to}`;
-  if (ratesCache.has(key)) return ratesCache.get(key);
-  const out = [];
-  let start = new Date(from);
-  const end = new Date(to);
-  while (start <= end) {
-    const chunkEnd = new Date(Math.min(end, new Date(start.getTime() + 89 * 864e5)));
-    const url = `https://api.nbp.pl/api/exchangerates/rates/a/${code}/${start.toISOString().slice(0, 10)}/${chunkEnd.toISOString().slice(0, 10)}/?format=json`;
-    const r = await fetch(url);
-    if (r.ok) out.push(...(await r.json()).rates.map((x) => ({ date: x.effectiveDate, mid: x.mid })));
-    start = new Date(chunkEnd.getTime() + 864e5);
-  }
-  ratesCache.set(key, out);
-  return out;
-}
-const rateAt = (rates, date) => {
-  let best = rates.length ? rates[0].mid : 1;
-  for (const r of rates) {
-    if (r.date <= date) best = r.mid;
-    else break;
-  }
-  return best;
-};
-const currencyOf = (name) =>
-  name.includes('EUR') ? 'EUR' : name.includes('USD') ? 'USD' : name.includes('CHF') ? 'CHF' : 'PLN';
-
-const BASES = new Set(['PLN', 'EUR', 'USD', 'CHF']);
-
-// --- Пользовательские настройки (persist в DATA_DIR/settings.json) ---------
-const SETTINGS_FILE = join(process.env.DATA_DIR || '/data', 'settings.json');
-let settingsCache = null;
-function getSettings() {
-  if (settingsCache) return settingsCache;
-  let s = {};
-  try {
-    s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch {}
-  settingsCache = {
-    excludedGroup: s.excludedGroup || process.env.EXCLUDED_GROUP || 'Переводы и обмены',
-    transferCategoryId: s.transferCategoryId || null,
-    excludeCategoryId: s.excludeCategoryId || null,
-    accountCurrencies: s.accountCurrencies || {}, // { [accountId]: 'USD' } — переопределение валюты счёта
-  };
-  return settingsCache;
-}
-async function saveSettings(patch) {
-  const cur = getSettings();
-  const next = {
-    ...cur,
-    ...patch,
-    accountCurrencies: { ...cur.accountCurrencies, ...(patch.accountCurrencies || {}) },
-  };
-  // чистим пустые переопределения валют
-  for (const k of Object.keys(next.accountCurrencies))
-    if (!next.accountCurrencies[k]) delete next.accountCurrencies[k];
-  await writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2)).catch(() => {});
-  settingsCache = next;
+function saveSettings(patch) {
+  const next = getSettings();
+  for (const k of Object.keys(SETTINGS_DEFAULT)) if (k in patch) next[k] = patch[k];
+  kvSet(db, 'settings', next);
   return next;
 }
-// валюта счёта: переопределение из настроек, иначе по имени
-const accountCurrency = (a) => getSettings().accountCurrencies[a.id] || currencyOf(a.name);
 
-// --- summary ---------------------------------------------------------------
-async function summary(from, to, base = 'PLN') {
-  await ensureBudget();
-  const ratesFrom = new Date(new Date(from).getTime() - 10 * 864e5).toISOString().slice(0, 10);
-  const RATES = {};
-  for (const c of ['EUR', 'USD', 'CHF']) RATES[c] = await nbpRange(c.toLowerCase(), ratesFrom, to);
-  // пересчёт из PLN в базовую валюту по кросс-курсу на дату операции
-  const toBase = (pln, date) => (base === 'PLN' ? pln : pln / rateAt(RATES[base], date));
+const listCategories = () =>
+  db
+    .prepare(
+      `SELECT c.id, c.name, c.group_id, g.name AS "group", c.is_income,
+         (SELECT COUNT(*) FROM transactions t WHERE t.category_id = c.id) AS count
+       FROM categories c JOIN category_groups g ON g.id = c.group_id ORDER BY g.sort, c.sort`,
+    )
+    .all()
+    .map((c) => ({ id: c.id, name: c.name, group: c.group, groupId: c.group_id, isIncome: !!c.is_income, count: c.count }));
 
-  const groups = await api.getCategoryGroups();
-  const excluded = new Set();
+/** {catInfo: id → {name, group, isIncome}, excluded: Set<id> группы «исключить из аналитики»} */
+function categoryIndex() {
+  const { excludedGroup } = getSettings();
   const catInfo = {};
-  for (const g of groups)
-    for (const c of g.categories || []) {
-      catInfo[c.id] = { name: c.name, group: g.name, isIncome: !!c.is_income };
-      if (g.name === getSettings().excludedGroup) excluded.add(c.id);
-    }
+  const excluded = new Set();
+  for (const c of listCategories()) {
+    catInfo[c.id] = c;
+    if (c.group === excludedGroup) excluded.add(c.id);
+  }
+  return { catInfo, excluded };
+}
 
-  // off-budget счета (инвестиции и т.п.) не участвуют в cash flow
-  const accounts = (await api.getAccounts()).filter((a) => !a.closed && !a.offbudget);
-  const payees = await api.getPayees();
-  const pById = Object.fromEntries(payees.map((p) => [p.id, p.name]));
+const openAccounts = () => db.prepare('SELECT * FROM accounts WHERE closed = 0 ORDER BY sort').all();
+
+const accountsList = () =>
+  openAccounts().map((a) => ({ id: a.id, name: a.name, currency: a.currency, offBudget: !!a.offbudget }));
+
+/** Операции периода по открытым счетам (+ имя и валюта счёта). */
+function txsBetween(from, to, { accountId, onBudgetOnly } = {}) {
+  return db
+    .prepare(
+      `SELECT t.*, a.name AS account, a.currency FROM transactions t
+       JOIN accounts a ON a.id = t.account_id AND a.closed = 0
+       WHERE t.date BETWEEN ? AND ? AND (? IS NULL OR a.id = ?) AND (? = 0 OR a.offbudget = 0)
+       ORDER BY t.date DESC, a.sort, t.rowid DESC`,
+    )
+    .all(from, to, accountId ?? null, accountId ?? null, onBudgetOnly ? 1 : 0);
+}
+
+// --- аналитика --------------------------------------------------------------
+async function summary(from, to, base) {
+  const conv = await converter(base, from, to);
+  const { catInfo, excluded } = categoryIndex();
 
   let income = 0;
   let expense = 0;
   let excludedCount = 0;
   const cats = new Map();
-  const accs = [];
+  const accs = new Map();
   const daily = new Map();
   const uncategorized = [];
 
-  for (const a of accounts) {
-    const cur = accountCurrency(a);
-    const txs = await api.getTransactions(a.id, from, to);
-    let accNet = 0;
-    let accCount = 0;
-    for (const t of txs) {
-      if (t.is_parent || t.transfer_id) continue;
-      const pn = pById[t.payee] || t.imported_payee || '—';
-      // стартовый остаток счёта (флаг Actual или его служебный payee) — не денежный поток
-      if (t.starting_balance_flag || pn === 'Starting Balance') continue;
-      if (t.category && excluded.has(t.category)) {
-        excludedCount++;
-        continue;
-      }
-      const pln = toBase((t.amount / 100) * (cur === 'PLN' ? 1 : rateAt(RATES[cur], t.date)), t.date);
-      accNet += pln;
-      accCount++;
-      if (pln >= 0) income += pln;
-      else expense += pln;
-
-      const info = t.category ? catInfo[t.category] : null;
-      const day = daily.get(t.date) || { net: 0, expense: 0, cats: new Map() };
-      day.net += pln;
-      if (pln < 0) {
-        // трата за день (положительное число) + разбивка по категориям «на что»
-        day.expense += -pln;
-        const cn = info?.name ?? 'Без категории';
-        day.cats.set(cn, (day.cats.get(cn) || 0) + -pln);
-      }
-      daily.set(t.date, day);
-      // непроставленные разделяем по знаку: расход и доход — в свои секции
-      const key = info
-        ? `${info.group} / ${info.name}`
-        : pln < 0
-          ? '(без категории:расход)'
-          : '(без категории:доход)';
-      if (!cats.has(key))
-        cats.set(key, {
-          group: info?.group ?? '',
-          name: info?.name ?? 'Без категории',
-          isIncome: info ? info.isIncome : pln >= 0,
-          total: 0,
-          count: 0,
-          payees: new Map(),
-        });
-      const c = cats.get(key);
-      c.total += pln;
-      c.count++;
-      // мерчант в разной валюте не слипается — ключ (имя, валюта)
-      const pkey = `${pn} ${cur}`;
-      const pe = c.payees.get(pkey) || { name: pn, currency: cur, sum: 0, native: 0, count: 0 };
-      pe.sum += pln;
-      pe.native += t.amount / 100; // сумма в валюте счёта
-      pe.count++;
-      c.payees.set(pkey, pe);
-
-      if (!t.category)
-        uncategorized.push({ id: t.id, date: t.date, amount: pln, payee: pn, account: a.name });
+  // off-budget счета (инвестиции и т.п.) не участвуют в cash flow; стартовый остаток — не поток
+  for (const t of txsBetween(from, to, { onBudgetOnly: true })) {
+    if (t.starting_balance) continue;
+    if (t.category_id && excluded.has(t.category_id)) {
+      excludedCount++;
+      continue;
     }
-    if (accCount) accs.push({ name: a.name, currency: cur, net: accNet, count: accCount });
+    const v = conv(t.amount / 100, t.currency, t.date);
+    const acc = accs.get(t.account_id) || { name: t.account, currency: t.currency, net: 0, count: 0 };
+    acc.net += v;
+    acc.count++;
+    accs.set(t.account_id, acc);
+    if (v >= 0) income += v;
+    else expense += v;
+
+    const info = t.category_id ? catInfo[t.category_id] : null;
+    const day = daily.get(t.date) || { net: 0, expense: 0, cats: new Map() };
+    day.net += v;
+    if (v < 0) {
+      // трата за день (положительное число) + разбивка по категориям «на что»
+      day.expense += -v;
+      const cn = info?.name ?? 'Без категории';
+      day.cats.set(cn, (day.cats.get(cn) || 0) + -v);
+    }
+    daily.set(t.date, day);
+    // непроставленные разделяем по знаку: расход и доход — в свои секции
+    const key = info ? `${info.group} / ${info.name}` : v < 0 ? '(без категории:расход)' : '(без категории:доход)';
+    if (!cats.has(key))
+      cats.set(key, {
+        group: info?.group ?? '',
+        name: info?.name ?? 'Без категории',
+        isIncome: info ? info.isIncome : v >= 0,
+        total: 0,
+        count: 0,
+        payees: new Map(),
+      });
+    const c = cats.get(key);
+    c.total += v;
+    c.count++;
+    // мерчант в разной валюте не слипается — ключ (имя, валюта)
+    const pkey = `${t.payee} ${t.currency}`;
+    const pe = c.payees.get(pkey) || { name: t.payee, currency: t.currency, sum: 0, native: 0, count: 0 };
+    pe.sum += v;
+    pe.native += t.amount / 100;
+    pe.count++;
+    c.payees.set(pkey, pe);
+
+    if (!t.category_id)
+      uncategorized.push({ id: t.id, date: t.date, amount: v, payee: t.payee, account: t.account });
   }
 
   let cum = 0;
@@ -329,468 +184,579 @@ async function summary(from, to, base = 'PLN') {
     savingsRate: income > 0 ? (income + expense) / income : null,
     excludedCount,
     categories: [...cats.values()]
-      .map((c) => ({
-        ...c,
-        payees: [...c.payees.values()]
-          .map((v) => ({ name: v.name, currency: v.currency, sum: v.sum, native: v.native, count: v.count }))
-          .sort((x, y) => x.sum - y.sum),
-      }))
+      .map((c) => ({ ...c, payees: [...c.payees.values()].sort((x, y) => x.sum - y.sum) }))
       .sort((x, y) => x.total - y.total),
-    accounts: accs.sort((x, y) => x.net - y.net),
+    accounts: [...accs.values()].sort((x, y) => x.net - y.net),
     daily: series,
     uncategorized: uncategorized.sort((x, y) => x.amount - y.amount).slice(0, 20),
   };
 }
 
-/** Плоская лента операций за период (для feed + модалки). opts: {accountId, limit} */
-async function transactions(from, to, base = 'PLN', opts = {}) {
-  await ensureBudget();
-  const ratesFrom = new Date(new Date(from).getTime() - 10 * 864e5).toISOString().slice(0, 10);
-  const RATES = {};
-  for (const c of ['EUR', 'USD', 'CHF']) RATES[c] = await nbpRange(c.toLowerCase(), ratesFrom, to);
-  const toBase = (pln, date) => (base === 'PLN' ? pln : pln / rateAt(RATES[base], date));
-
-  const groups = await api.getCategoryGroups();
-  const catInfo = {};
-  const excluded = new Set();
-  for (const g of groups)
-    for (const c of g.categories || []) {
-      catInfo[c.id] = { name: c.name, group: g.name };
-      if (g.name === getSettings().excludedGroup) excluded.add(c.id);
-    }
-  // история счёта показывает и off-budget (инвестиции); общая лента — только on-budget
-  let accounts = (await api.getAccounts()).filter((a) => !a.closed);
-  if (opts.accountId) accounts = accounts.filter((a) => a.id === opts.accountId);
-  else accounts = accounts.filter((a) => !a.offbudget);
-  const payees = await api.getPayees();
-  const pById = Object.fromEntries(payees.map((p) => [p.id, p.name]));
-
-  const out = [];
-  for (const a of accounts) {
-    const cur = accountCurrency(a);
-    for (const t of await api.getTransactions(a.id, from, to)) {
-      if (t.is_parent) continue;
-      const native = t.amount / 100;
-      const amount = toBase(native * (cur === 'PLN' ? 1 : rateAt(RATES[cur], t.date)), t.date);
-      const pn = pById[t.payee] || t.imported_payee || '—';
-      out.push({
-        id: t.id,
-        date: t.date,
-        payee: pn,
-        account: a.name,
-        accountId: a.id,
-        currency: cur,
-        native,
-        amount,
-        categoryId: t.category || null,
-        category: t.category ? catInfo[t.category]?.name : null,
-        excluded: t.category ? excluded.has(t.category) : false,
-        isTransfer: !!t.transfer_id,
-        startingBalance: !!t.starting_balance_flag || pn === 'Starting Balance',
-        notes: t.notes || '',
-      });
-    }
-  }
-  out.sort((x, y) => (y.date === x.date ? 0 : y.date < x.date ? -1 : 1));
-  const limited = opts.limit ? out.slice(0, opts.limit) : out;
-  return { from, to, base, transactions: limited };
+/** Плоская лента операций (feed + модалки). История счёта включает off-budget, общая лента — нет. */
+async function transactions(from, to, base, { accountId, limit } = {}) {
+  const conv = await converter(base, from, to);
+  const { catInfo, excluded } = categoryIndex();
+  const rows = txsBetween(from, to, { accountId, onBudgetOnly: !accountId });
+  const out = (limit ? rows.slice(0, limit) : rows).map((t) => ({
+    id: t.id,
+    date: t.date,
+    payee: t.payee,
+    account: t.account,
+    accountId: t.account_id,
+    currency: t.currency,
+    native: t.amount / 100,
+    amount: conv(t.amount / 100, t.currency, t.date),
+    categoryId: t.category_id,
+    category: t.category_id ? (catInfo[t.category_id]?.name ?? null) : null,
+    excluded: t.category_id ? excluded.has(t.category_id) : false,
+    isTransfer: false,
+    startingBalance: !!t.starting_balance,
+    notes: t.notes,
+    manual: !t.imported_id,
+    pending: !t.cleared,
+  }));
+  return { from, to, base, transactions: out };
 }
 
-async function meta() {
-  await ensureBudget();
-  const accounts = (await api.getAccounts()).filter((a) => !a.closed);
-  let min = '9999-12-31';
-  let max = '0000-01-01';
-  for (const a of accounts) {
-    for (const t of await api.getTransactions(a.id, '2000-01-01', '2100-01-01')) {
-      if (t.starting_balance_flag) continue;
-      if (t.date < min) min = t.date;
-      if (t.date > max) max = t.date;
-    }
-  }
-  return { firstDate: min, lastDate: max };
+function meta() {
+  const r = db
+    .prepare(
+      `SELECT MIN(t.date) AS firstDate, MAX(t.date) AS lastDate FROM transactions t
+       JOIN accounts a ON a.id = t.account_id AND a.closed = 0 WHERE t.starting_balance = 0`,
+    )
+    .get();
+  return { firstDate: r.firstDate ?? '9999-12-31', lastDate: r.lastDate ?? '0000-01-01' };
 }
 
-async function listCategories() {
-  await ensureBudget();
-  const groups = await api.getCategoryGroups();
-  const out = [];
-  for (const g of groups)
-    for (const c of g.categories || [])
-      out.push({ id: c.id, name: c.name, group: g.name, isIncome: !!c.is_income });
-  return out;
+/** Балансы всех открытых счетов (включая off-budget) в базовой валюте по свежему курсу. */
+async function balances(base) {
+  const rates = await latestRates();
+  const toPln = (v, cur) => (cur === 'PLN' ? v : v * rates[cur]);
+  const sums = db.prepare('SELECT account_id, SUM(amount) AS s FROM transactions GROUP BY account_id').all();
+  const sumBy = new Map(sums.map((r) => [r.account_id, r.s]));
+  let totalPln = 0;
+  const out = openAccounts().map((a) => {
+    const balance = (sumBy.get(a.id) || 0) / 100;
+    const pln = toPln(balance, a.currency);
+    const balancePln = base === 'PLN' ? pln : pln / rates[base];
+    totalPln += balancePln;
+    return { id: a.id, name: a.name, currency: a.currency, balance, balancePln, offBudget: !!a.offbudget };
+  });
+  out.sort((x, y) => y.balancePln - x.balancePln);
+  return { accounts: out, totalPln, rates, base };
 }
 
-async function updateByPayee(payeeName, from, to, categoryId) {
-  const accounts = (await api.getAccounts()).filter((a) => !a.closed);
-  const payees = await api.getPayees();
-  const pById = Object.fromEntries(payees.map((p) => [p.id, p.name]));
-  let updated = 0;
-  for (const a of accounts) {
-    for (const t of await api.getTransactions(a.id, from, to)) {
-      if (t.is_parent || t.starting_balance_flag || t.transfer_id) continue;
-      const pn = pById[t.payee] || t.imported_payee || '—';
-      if (pn !== payeeName) continue;
-      await api.updateTransaction(t.id, { category: categoryId });
-      updated++;
-    }
+/** История капитала: суммарный баланс открытых счетов по дням, курс НБП на каждую дату. */
+async function networthHistory(base) {
+  const rows = db
+    .prepare(
+      `SELECT t.date, a.currency, SUM(t.amount) AS amount FROM transactions t
+       JOIN accounts a ON a.id = t.account_id AND a.closed = 0 GROUP BY t.date, a.currency ORDER BY t.date`,
+    )
+    .all();
+  const end = today();
+  const start = rows.length && rows[0].date < end ? rows[0].date : end;
+  const R = {};
+  for (const c of ['EUR', 'USD', 'CHF']) R[c] = await nbpRange(c.toLowerCase(), shiftDays(start, -10), end);
+  const bal = { PLN: 0, EUR: 0, USD: 0, CHF: 0 };
+  const series = [];
+  let i = 0;
+  for (let ds = start; ; ds = shiftDays(ds, 1)) {
+    while (i < rows.length && rows[i].date <= ds) bal[rows[i].currency] += rows[i++].amount;
+    let total = bal.PLN / 100;
+    for (const c of ['EUR', 'USD', 'CHF']) total += (bal[c] / 100) * rateAt(R[c], ds);
+    if (base !== 'PLN') total /= rateAt(R[base], ds);
+    series.push({ date: ds, totalPln: total });
+    if (ds >= end) break;
   }
-  return updated;
+  return { series, base };
+}
+
+// --- запись ------------------------------------------------------------------
+const touch = "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+
+function requireCategory(id) {
+  if (!db.prepare('SELECT 1 FROM categories WHERE id = ?').get(id)) throw bad('unknown categoryId');
+}
+
+/** Upsert правила «payee → категория»: одно правило на мерчанта, без дублей. */
+function upsertPayeeRule(payee, categoryId) {
+  const name = payee.toLowerCase();
+  const existing = db
+    .prepare('SELECT id, conditions FROM rules')
+    .all()
+    .find((r) =>
+      JSON.parse(r.conditions).some(
+        (c) =>
+          (c.field === 'payee' &&
+            (Array.isArray(c.value) ? c.value : [c.value]).some((v) => v.toLowerCase() === name)) ||
+          (c.field === 'imported_payee' && c.value.toLowerCase() === name),
+      ),
+    );
+  const conditions = JSON.stringify([{ field: 'payee', op: 'is', value: payee }]);
+  if (existing)
+    db.prepare("UPDATE rules SET conditions = ?, conditions_op = 'and', category_id = ? WHERE id = ?").run(
+      conditions,
+      categoryId,
+      existing.id,
+    );
+  else
+    db.prepare('INSERT INTO rules (id, conditions, category_id) VALUES (?, ?, ?)').run(newId(), conditions, categoryId);
 }
 
 /**
  * Смена категории:
  *  {txId}                — одна транзакция
  *  {payee, from, to}     — операции мерчанта за период
- *  {payee, allTime,rule} — вся история мерчанта + правило Actual на будущие
+ *  {payee, allTime,rule} — вся история мерчанта + правило на будущие синки
  */
-async function categorize(body) {
-  await ensureBudget();
-  const valid = new Set((await listCategories()).map((c) => c.id));
-  if (!valid.has(body.categoryId)) throw new Error('unknown categoryId');
-
-  let updated = 0;
-  let ruleCreated = false;
-  if (body.txId) {
-    await api.updateTransaction(body.txId, { category: body.categoryId });
-    updated = 1;
-  } else if (body.payee && body.allTime) {
-    updated = await updateByPayee(body.payee, '2000-01-01', '2100-01-01', body.categoryId);
-    if (body.rule) {
-      const payees = await api.getPayees();
-      const ids = payees.filter((p) => p.name === body.payee && !p.transfer_acct).map((p) => p.id);
-      const condition = ids.length
-        ? { field: 'payee', op: 'oneOf', value: ids }
-        : { field: 'imported_payee', op: 'contains', value: body.payee };
-      // upsert: если правило на этого мерчанта уже есть — обновляем, не плодим дубли
-      const idSet = new Set(ids);
-      const existing = (await api.getRules()).find(
-        (r) =>
-          (r.actions || []).some((x) => x.op === 'set' && x.field === 'category') &&
-          (r.conditions || []).some(
-            (c) =>
-              (c.field === 'payee' &&
-                (Array.isArray(c.value) ? c.value.some((v) => idSet.has(v)) : idSet.has(c.value))) ||
-              (c.field === 'imported_payee' && c.value === body.payee),
-          ),
-      );
-      if (existing) {
-        await api.updateRule({
-          ...existing,
-          conditions: [condition],
-          actions: [{ op: 'set', field: 'category', value: body.categoryId }],
-        });
-      } else {
-        await api.createRule({
-          stage: null,
-          conditionsOp: 'and',
-          conditions: [condition],
-          actions: [{ op: 'set', field: 'category', value: body.categoryId }],
-        });
-      }
-      ruleCreated = true;
+function categorize(b) {
+  requireCategory(b.categoryId);
+  const byPayee = db.prepare(
+    `UPDATE transactions SET category_id = ?, ${touch}
+     WHERE payee = ? AND starting_balance = 0 AND date BETWEEN ? AND ?`,
+  );
+  return tx(db, () => {
+    if (b.txId) {
+      const r = db.prepare(`UPDATE transactions SET category_id = ?, ${touch} WHERE id = ?`).run(b.categoryId, b.txId);
+      if (!r.changes) throw new HttpError(404, 'transaction not found');
+      return { updated: 1, ruleCreated: false };
     }
-  } else if (body.payee && DATE.test(body.from || '') && DATE.test(body.to || '')) {
-    updated = await updateByPayee(body.payee, body.from, body.to, body.categoryId);
-  } else {
-    throw new Error('need txId, payee+allTime or payee+from+to');
-  }
-  await api.sync();
-  return { updated, ruleCreated };
+    if (b.payee && b.allTime) {
+      const { changes } = byPayee.run(b.categoryId, b.payee, '0000-01-01', '9999-12-31');
+      if (b.rule) upsertPayeeRule(b.payee, b.categoryId);
+      return { updated: changes, ruleCreated: !!b.rule };
+    }
+    if (b.payee && DATE.test(b.from || '') && DATE.test(b.to || '')) {
+      const { changes } = byPayee.run(b.categoryId, b.payee, b.from, b.to);
+      return { updated: changes, ruleCreated: false };
+    }
+    throw bad('need txId, payee+allTime or payee+from+to');
+  });
 }
 
-async function accountsList() {
-  await ensureBudget();
-  return (await api.getAccounts())
-    .filter((a) => !a.closed)
-    .map((a) => ({
-      id: a.id,
-      name: a.name,
-      currency: accountCurrency(a),
-      offBudget: !!a.offbudget,
-    }));
-}
+const insertTx = db.prepare(
+  `INSERT INTO transactions (id, account_id, date, amount, payee, notes, category_id, cleared)
+   VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+);
+const accountById = (id) => db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
 
 /** Ручная операция: одна транзакция на счёт (сумма в валюте счёта, знак — направление). */
-async function addOperation(b) {
-  await ensureBudget();
+function addOperation(b) {
   if (!b.accountId || !DATE.test(b.date || '') || !Number.isFinite(Number(b.amount)))
-    throw new Error('need accountId, date (YYYY-MM-DD), amount');
-  const cents = Math.round(Number(b.amount) * 100);
-  await api.addTransactions(b.accountId, [
-    {
-      date: b.date,
-      amount: cents,
-      payee_name: (b.payee || b.notes || 'Операция').slice(0, 100),
-      notes: (b.notes || '').slice(0, 200),
-      category: b.categoryId || null,
-      cleared: true,
-    },
-  ]);
-  await api.sync();
-  lastSync = Date.now();
+    throw bad('need accountId, date (YYYY-MM-DD), amount');
+  if (!accountById(b.accountId)) throw bad('account not found');
+  if (b.categoryId) requireCategory(b.categoryId);
+  insertTx.run(
+    newId(),
+    b.accountId,
+    b.date,
+    Math.round(Number(b.amount) * 100),
+    (b.payee || b.notes || 'Операция').slice(0, 100),
+    (b.notes || '').slice(0, 200),
+    b.categoryId || null,
+  );
   return { ok: true };
 }
 
 /** Перевод между счетами (одна валюта): две транзакции в категории «Переводы между счетами». */
-async function addTransfer(b) {
-  await ensureBudget();
+function addTransfer(b) {
   if (!b.fromAccountId || !b.toAccountId || b.fromAccountId === b.toAccountId)
-    throw new Error('need distinct fromAccountId/toAccountId');
-  if (!DATE.test(b.date || '') || !(Number(b.amount) > 0))
-    throw new Error('need date and positive amount');
+    throw bad('need distinct fromAccountId/toAccountId');
+  if (!DATE.test(b.date || '') || !(Number(b.amount) > 0)) throw bad('need date and positive amount');
+  const from = accountById(b.fromAccountId);
+  const to = accountById(b.toAccountId);
+  if (!from || !to) throw bad('account not found');
+  if (from.currency !== to.currency) throw bad('перевод только между счетами одной валюты');
+  const cat =
+    getSettings().transferCategoryId ??
+    db.prepare("SELECT id FROM categories WHERE name = 'Переводы между счетами'").get()?.id ??
+    null;
   const cents = Math.round(Number(b.amount) * 100);
-  const accounts = await api.getAccounts();
-  const from = accounts.find((a) => a.id === b.fromAccountId);
-  const to = accounts.find((a) => a.id === b.toAccountId);
-  if (!from || !to) throw new Error('account not found');
-  if (accountCurrency(from) !== accountCurrency(to))
-    throw new Error('перевод только между счетами одной валюты');
-  const groups = await api.getCategoryGroups();
-  let transferCat = getSettings().transferCategoryId;
-  if (!transferCat)
-    for (const g of groups)
-      for (const c of g.categories || []) if (c.name === 'Переводы между счетами') transferCat = c.id;
-  await api.addTransactions(b.fromAccountId, [
-    {
-      date: b.date,
-      amount: -cents,
-      payee_name: `→ ${to.name}`.slice(0, 100),
-      notes: `Перевод на ${to.name}`,
-      category: transferCat,
-      cleared: true,
-    },
-  ]);
-  await api.addTransactions(b.toAccountId, [
-    {
-      date: b.date,
-      amount: cents,
-      payee_name: `← ${from.name}`.slice(0, 100),
-      notes: `Перевод с ${from.name}`,
-      category: transferCat,
-      cleared: true,
-    },
-  ]);
-  await api.sync();
-  lastSync = Date.now();
+  tx(db, () => {
+    insertTx.run(newId(), from.id, b.date, -cents, `→ ${to.name}`.slice(0, 100), `Перевод на ${to.name}`, cat);
+    insertTx.run(newId(), to.id, b.date, cents, `← ${from.name}`.slice(0, 100), `Перевод с ${from.name}`, cat);
+  });
   return { ok: true };
 }
 
 /** Исключить транзакцию из аналитики — категория из настроек, иначе из группы исключений. */
-async function excludeTx(txId) {
-  await ensureBudget();
+function excludeTx(txId) {
   const s = getSettings();
-  let catId = s.excludeCategoryId;
-  if (!catId) {
-    const groups = await api.getCategoryGroups();
-    const grp = groups.find((g) => g.name === s.excludedGroup);
-    const cats = grp?.categories || [];
-    catId = (cats.find((c) => c.name === 'Исключено') || cats[0])?.id;
-  }
-  if (!catId) throw new Error('нет категории для исключения — задайте её в Настройках');
-  await api.updateTransaction(txId, { category: catId });
-  await api.sync();
-  lastSync = Date.now();
+  const catId =
+    s.excludeCategoryId ??
+    db
+      .prepare(
+        `SELECT c.id FROM categories c JOIN category_groups g ON g.id = c.group_id
+         WHERE g.name = ? ORDER BY c.name = 'Исключено' DESC, c.sort LIMIT 1`,
+      )
+      .get(s.excludedGroup)?.id;
+  if (!catId) throw bad('нет категории для исключения — задайте её в Настройках');
+  const r = db.prepare(`UPDATE transactions SET category_id = ?, ${touch} WHERE id = ?`).run(catId, txId);
+  if (!r.changes) throw new HttpError(404, 'transaction not found');
   return { ok: true };
 }
 
-/** Балансы всех счетов (включая off-budget) в базовой валюте по свежему курсу. */
-async function balances(base = 'PLN') {
-  await ensureBudget();
-  const today = new Date().toISOString().slice(0, 10);
-  const ratesFrom = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
-  const RATES = {};
-  for (const c of ['EUR', 'USD', 'CHF']) {
-    const rs = await nbpRange(c.toLowerCase(), ratesFrom, today);
-    RATES[c] = rs.length ? rs[rs.length - 1].mid : 1;
+// --- операции, категории, правила ----------------------------------------------
+const txById = (id) => {
+  const t = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+  if (!t) throw new HttpError(404, 'transaction not found');
+  return t;
+};
+
+/** Правка операции: получатель и заметка — у любой; дата и сумма — только у ручной (у банковской их задаёт банк). */
+function updateTransaction(b) {
+  const t = txById(b.id);
+  const next = { payee: t.payee, notes: t.notes, date: t.date, amount: t.amount };
+  if (b.payee !== undefined) {
+    next.payee = String(b.payee).trim().slice(0, 100);
+    if (!next.payee) throw bad('пустой получатель');
   }
-  const toBase = (pln) => (base === 'PLN' ? pln : pln / RATES[base]);
-  const out = [];
-  let totalPln = 0;
-  for (const a of (await api.getAccounts()).filter((x) => !x.closed)) {
-    const cur = accountCurrency(a);
-    let cents = 0;
-    for (const t of await api.getTransactions(a.id, '2000-01-01', '2100-01-01')) {
-      if (t.is_parent) continue;
-      cents += t.amount;
+  if (b.notes !== undefined) next.notes = String(b.notes).trim().slice(0, 500);
+  if (b.date !== undefined || b.amount !== undefined) {
+    if (t.imported_id) throw bad('дату и сумму банковской операции задаёт банк');
+    if (b.date !== undefined) {
+      if (!DATE.test(b.date)) throw bad('date must be YYYY-MM-DD');
+      next.date = b.date;
     }
-    const balance = cents / 100;
-    const balancePln = toBase(balance * (cur === 'PLN' ? 1 : RATES[cur]));
-    totalPln += balancePln;
-    out.push({ id: a.id, name: a.name, currency: cur, balance, balancePln, offBudget: !!a.offbudget });
+    if (b.amount !== undefined) {
+      if (!Number.isFinite(Number(b.amount))) throw bad('bad amount');
+      next.amount = Math.round(Number(b.amount) * 100);
+    }
   }
-  out.sort((x, y) => y.balancePln - x.balancePln);
-  return { accounts: out, totalPln, rates: RATES, base };
+  db.prepare(`UPDATE transactions SET payee = ?, notes = ?, date = ?, amount = ?, ${touch} WHERE id = ?`).run(
+    next.payee,
+    next.notes,
+    next.date,
+    next.amount,
+    t.id,
+  );
+  return { ok: true };
 }
 
-/** История капитала: суммарный баланс всех счетов по дням, курс НБП на каждую дату. */
-async function networthHistory(base = 'PLN') {
-  await ensureBudget();
-  const accounts = (await api.getAccounts()).filter((a) => !a.closed);
-  const today = new Date().toISOString().slice(0, 10);
-  const byCur = { PLN: [], EUR: [], USD: [], CHF: [] };
-  let minDate = today;
-  for (const a of accounts) {
-    const cur = accountCurrency(a);
-    for (const t of await api.getTransactions(a.id, '2000-01-01', '2100-01-01')) {
-      if (t.is_parent) continue;
-      byCur[cur].push({ date: t.date, amount: t.amount });
-      if (t.date < minDate) minDate = t.date;
-    }
-  }
-  for (const c of Object.keys(byCur)) byCur[c].sort((x, y) => x.date.localeCompare(y.date));
+function deleteTransaction(id) {
+  const t = txById(id);
+  // иначе следующий синк вернёт её обратно
+  if (t.imported_id) throw bad('банковскую операцию удалить нельзя — исключите её из аналитики');
+  db.prepare('DELETE FROM transactions WHERE id = ?').run(id);
+  return { ok: true };
+}
 
-  const ratesFrom = new Date(new Date(minDate).getTime() - 10 * 864e5).toISOString().slice(0, 10);
-  const RATES = {};
-  for (const c of ['EUR', 'USD', 'CHF']) RATES[c] = await nbpRange(c.toLowerCase(), ratesFrom, today);
+const nextSort = (table) => db.prepare(`SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM ${table}`).get().n;
 
-  const series = [];
-  const idx = { PLN: 0, EUR: 0, USD: 0, CHF: 0 };
-  const bal = { PLN: 0, EUR: 0, USD: 0, CHF: 0 };
-  for (let d = new Date(minDate); ; d = new Date(d.getTime() + 864e5)) {
-    const ds = d.toISOString().slice(0, 10);
-    for (const c of Object.keys(byCur)) {
-      const list = byCur[c];
-      while (idx[c] < list.length && list[idx[c]].date <= ds) {
-        bal[c] += list[idx[c]].amount;
-        idx[c]++;
+/** Новая категория в существующей группе (groupId) или в новой/найденной по имени (groupName). */
+function createCategory(b) {
+  const name = String(b.name || '').trim();
+  if (!name) throw bad('need name');
+  return tx(db, () => {
+    let gid = b.groupId;
+    if (gid) {
+      if (!db.prepare('SELECT 1 FROM category_groups WHERE id = ?').get(gid)) throw bad('unknown groupId');
+    } else {
+      const gname = String(b.groupName || '').trim();
+      if (!gname) throw bad('need groupId or groupName');
+      gid = db.prepare('SELECT id FROM category_groups WHERE name = ?').get(gname)?.id;
+      if (!gid) {
+        gid = newId();
+        db.prepare('INSERT INTO category_groups (id, name, is_income, sort) VALUES (?, ?, ?, ?)').run(
+          gid,
+          gname,
+          b.isIncome ? 1 : 0,
+          nextSort('category_groups'),
+        );
       }
     }
-    let total = bal.PLN / 100;
-    for (const c of ['EUR', 'USD', 'CHF']) total += (bal[c] / 100) * rateAt(RATES[c], ds);
-    if (base !== 'PLN') total /= rateAt(RATES[base], ds);
-    series.push({ date: ds, totalPln: total });
-    if (ds >= today) break;
-  }
-  return { series, base };
+    if (db.prepare('SELECT 1 FROM categories WHERE group_id = ? AND name = ?').get(gid, name))
+      throw bad('такая категория уже есть');
+    const id = newId();
+    db.prepare(
+      'INSERT INTO categories (id, group_id, name, is_income, sort) SELECT ?, id, ?, is_income, ? FROM category_groups WHERE id = ?',
+    ).run(id, name, nextSort('categories'), gid);
+    return listCategories().find((c) => c.id === id);
+  });
 }
 
+function renameCategory(b) {
+  requireCategory(b.id);
+  const name = String(b.name || '').trim();
+  if (!name) throw bad('need name');
+  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(name, b.id);
+  return { ok: true };
+}
+
+/** Удаление категории: операции и правила переезжают в replaceWith (или операции остаются без категории). */
+function deleteCategory(b) {
+  requireCategory(b.id);
+  if (b.replaceWith) requireCategory(b.replaceWith);
+  if (b.replaceWith === b.id) throw bad('replaceWith = id');
+  return tx(db, () => {
+    const to = b.replaceWith || null;
+    const moved = db.prepare(`UPDATE transactions SET category_id = ?, ${touch} WHERE category_id = ?`).run(to, b.id).changes;
+    if (to) db.prepare('UPDATE rules SET category_id = ? WHERE category_id = ?').run(to, b.id);
+    else db.prepare('DELETE FROM rules WHERE category_id = ?').run(b.id);
+    const s = getSettings();
+    for (const k of ['transferCategoryId', 'excludeCategoryId']) if (s[k] === b.id) s[k] = to;
+    kvSet(db, 'settings', s);
+    const { group_id } = db.prepare('SELECT group_id FROM categories WHERE id = ?').get(b.id);
+    db.prepare('DELETE FROM categories WHERE id = ?').run(b.id);
+    // пустую группу убираем (кроме группы исключений из настроек)
+    db.prepare(
+      'DELETE FROM category_groups WHERE id = ? AND name <> ? AND NOT EXISTS (SELECT 1 FROM categories WHERE group_id = ?)',
+    ).run(group_id, s.excludedGroup, group_id);
+    return { moved };
+  });
+}
+
+/** Правила + сколько операций из истории под них попадает. */
+function listRules() {
+  const { catInfo } = categoryIndex();
+  const txs = db.prepare('SELECT payee, imported_payee, notes FROM transactions WHERE starting_balance = 0').all();
+  return loadRules(db).map((r) => ({
+    id: r.id,
+    conditionsOp: r.conditions_op,
+    conditions: r.conditions,
+    categoryId: r.category_id,
+    category: catInfo[r.category_id]?.name ?? null,
+    matches: txs.filter((t) => ruleMatches(r, t)).length,
+  }));
+}
+
+function saveRule(b) {
+  requireCategory(b.categoryId);
+  const conditions = JSON.stringify(validateConditions(b.conditions));
+  const op = b.conditionsOp === 'or' ? 'or' : 'and';
+  if (b.id) {
+    const r = db.prepare('UPDATE rules SET conditions = ?, conditions_op = ?, category_id = ? WHERE id = ?').run(
+      conditions,
+      op,
+      b.categoryId,
+      b.id,
+    );
+    if (!r.changes) throw new HttpError(404, 'rule not found');
+    return { id: b.id };
+  }
+  const id = newId();
+  db.prepare('INSERT INTO rules (id, conditions_op, conditions, category_id) VALUES (?, ?, ?, ?)').run(id, op, conditions, b.categoryId);
+  return { id };
+}
+
+function deleteRule(id) {
+  if (!db.prepare('DELETE FROM rules WHERE id = ?').run(id).changes) throw new HttpError(404, 'rule not found');
+  return { ok: true };
+}
+
+/** Прогнать правила по операциям без категории. */
+function applyRules() {
+  const rules = loadRules(db);
+  const set = db.prepare(`UPDATE transactions SET category_id = ?, ${touch} WHERE id = ?`);
+  return tx(db, () => {
+    let updated = 0;
+    for (const t of db.prepare('SELECT * FROM transactions WHERE category_id IS NULL AND starting_balance = 0').all()) {
+      const c = categoryFor(rules, t);
+      if (c) updated += set.run(c, t.id).changes;
+    }
+    return { updated };
+  });
+}
+
+// --- банк-синк ----------------------------------------------------------------
+const syncState = () => kvGet(db, 'bankSync', { lastBankSyncAt: null });
+
+// копия в iCloud после каждого синка — не валим синк, если бэкап не удался
+async function backupAfterSync() {
+  const arc = await backupDb(db).catch((e) => console.error('[backup] не удалось:', e?.message || e));
+  if (arc) console.log('[backup] снапшот:', arc);
+}
+
+const bankSync = (psu, accountIds) => runBankSync(db, { psu, accountIds, onDone: backupAfterSync });
+
+/** PSU-заголовки: синк запустил человек → банк не считает запрос фоновым (лимит PSD2 4/сутки). */
+const psuOf = (req) => ({
+  ip: (req.socket.remoteAddress || '').replace(/^::ffff:/, ''),
+  userAgent: req.headers['user-agent'],
+});
+
+/** Согласия, которые кончились или кончатся в ближайшие 14 дней. */
+const expiringConsents = () =>
+  banksView(db)
+    .filter((b) => b.consentUntil && new Date(b.consentUntil) - Date.now() < 14 * 864e5)
+    .map((b) => ({ bank: b.name, consentUntil: b.consentUntil }));
+
+// автосинк по расписанию (локальное время), с догоном после сна/выключения
+const AUTO_SYNC_TIMES = (process.env.AUTO_SYNC_TIMES ?? '07:30').split(',').map((x) => x.trim()).filter(Boolean);
+function lastScheduledBefore(now) {
+  let best = null;
+  for (const hm of AUTO_SYNC_TIMES) {
+    const [h, m] = hm.split(':').map(Number);
+    for (const back of [0, 1]) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - back);
+      d.setHours(h, m, 0, 0);
+      if (d <= now && (!best || d > best)) best = d;
+    }
+  }
+  return best;
+}
+function autoSyncTick() {
+  if (!ebConfigured() || isSyncing()) return;
+  const due = lastScheduledBefore(new Date());
+  const last = syncState().lastAttemptAt;
+  if (due && (!last || new Date(last) < due)) bankSync().catch((e) => console.error('[auto-sync]', e));
+}
+
+/** Колбэк банка после авторизации → привязка счетов → синк → назад на страницу «Банки». */
+async function authCallback(q, req, res) {
+  const back = (params) => {
+    res.writeHead(302, { Location: `${PUBLIC_URL}/banks?${new URLSearchParams(params)}` });
+    res.end();
+  };
+  if (q.get('error')) return back({ error: q.get('error_description') || q.get('error') });
+  try {
+    const r = await completeConnect(db, { code: q.get('code'), state: q.get('state') });
+    await bankSync(psuOf(req), r.accountIds).catch(() => {});
+    back({ linked: [...r.linked, ...r.created].join(', '), until: r.validUntil ?? '' });
+  } catch (e) {
+    console.error('[connect]', e);
+    back({ error: String(e.message || e) });
+  }
+}
+
+// --- http -------------------------------------------------------------------
 const readBody = (req) =>
   new Promise((resolve, reject) => {
     let s = '';
     req.on('data', (c) => {
       s += c;
-      if (s.length > 65536) reject(new Error('body too large'));
+      if (s.length > 65536) reject(bad('body too large'));
     });
-    req.on('end', () => resolve(s));
+    req.on('end', () => {
+      try {
+        resolve(s ? JSON.parse(s) : {});
+      } catch {
+        reject(bad('invalid JSON'));
+      }
+    });
     req.on('error', reject);
   });
 
-// --- http -------------------------------------------------------------------
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
+function period(q) {
+  const from = q.get('from');
+  const to = q.get('to');
+  if (!DATE.test(from || '') || !DATE.test(to || '')) throw bad('from/to must be YYYY-MM-DD');
+  return [from, to];
+}
 
-createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+const routes = {
+  'GET /api/summary': ({ q, base }) => summary(...period(q), base),
+  'GET /api/transactions': ({ q, base }) => {
+    const limit = Number(q.get('limit'));
+    return transactions(...period(q), base, {
+      accountId: q.get('account') || undefined,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : undefined,
+    });
+  },
+  'GET /api/meta': meta,
+  'GET /api/sync-status': () => ({ ...syncState(), syncing: isSyncing(), expiring: expiringConsents() }),
+  'POST /api/bank-sync': ({ req }) => bankSync(psuOf(req)),
+  'GET /api/banks': () => banksView(db),
+  'GET /api/banks/aspsps': async ({ q }) =>
+    (await eb.aspsps(q.get('country') || 'PL')).aspsps.map((b) => ({
+      name: b.name,
+      country: b.country,
+      maxConsentDays: Math.floor((b.maximum_consent_validity || 0) / 86400),
+    })),
+  'POST /api/banks/connect': ({ body }) => {
+    if (!body.aspsp) throw bad('need aspsp');
+    return startConnect(body);
+  },
+  'GET /api/categories': listCategories,
+  'GET /api/balances': ({ base }) => balances(base),
+  'GET /api/accounts': accountsList,
+  'GET /api/settings': getSettings,
+  'POST /api/settings': ({ body }) => saveSettings(body),
+  'POST /api/exclude': ({ body }) => excludeTx(body.txId),
+  'POST /api/operation': ({ body }) => addOperation(body),
+  'POST /api/transfer': ({ body }) => addTransfer(body),
+  'GET /api/networth-history': ({ base }) => networthHistory(base),
+  'POST /api/categorize': ({ body }) => categorize(body),
+  'POST /api/transaction/update': ({ body }) => updateTransaction(body),
+  'POST /api/transaction/delete': ({ body }) => deleteTransaction(body.id),
+  'POST /api/categories': ({ body }) => createCategory(body),
+  'POST /api/categories/rename': ({ body }) => renameCategory(body),
+  'POST /api/categories/delete': ({ body }) => deleteCategory(body),
+  'GET /api/rules': listRules,
+  'POST /api/rules': ({ body }) => saveRule(body),
+  'POST /api/rules/delete': ({ body }) => deleteRule(body.id),
+  'POST /api/rules/apply': applyRules,
+  'POST /api/backup': async () => ({ archive: await backupDb(db) }),
+};
+
+const MIME = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+};
+
+async function serveStatic(pathname, res) {
+  const file = normalize(join(STATIC_DIR, pathname === '/' ? '/index.html' : pathname));
+  if (!file.startsWith(normalize(STATIC_DIR))) throw new HttpError(403, 'path');
   try {
-    const base = (url.searchParams.get('base') || 'PLN').toUpperCase();
-    if (!BASES.has(base)) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'base must be PLN|EUR|USD|CHF' }));
-    }
-    if (url.pathname === '/api/summary') {
-      const from = url.searchParams.get('from');
-      const to = url.searchParams.get('to');
-      if (!DATE.test(from || '') || !DATE.test(to || '')) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'from/to must be YYYY-MM-DD' }));
-      }
-      const data = await summary(from, to, base);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(data));
-    }
-    if (url.pathname === '/api/transactions') {
-      const from = url.searchParams.get('from');
-      const to = url.searchParams.get('to');
-      if (!DATE.test(from || '') || !DATE.test(to || '')) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'from/to must be YYYY-MM-DD' }));
-      }
-      const accountId = url.searchParams.get('account') || undefined;
-      const limitRaw = Number(url.searchParams.get('limit'));
-      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : undefined;
-      const data = await transactions(from, to, base, { accountId, limit });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(data));
-    }
-    if (url.pathname === '/api/meta') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(await meta()));
-    }
-    if (url.pathname === '/api/sync-status') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ...readSyncState(), syncing: bankSyncing }));
-    }
-    if (url.pathname === '/api/bank-sync' && req.method === 'POST') {
-      const result = await runBankSync();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(result));
-    }
-    if (url.pathname === '/api/categories') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(await listCategories()));
-    }
-    if (url.pathname === '/api/balances') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(await balances(base)));
-    }
-    if (url.pathname === '/api/accounts') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(await accountsList()));
-    }
-    if (url.pathname === '/api/settings' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(getSettings()));
-    }
-    if (url.pathname === '/api/settings' && req.method === 'POST') {
-      const saved = await saveSettings(JSON.parse(await readBody(req)));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(saved));
-    }
-    if (url.pathname === '/api/exclude' && req.method === 'POST') {
-      const body = JSON.parse(await readBody(req));
-      const result = await excludeTx(body.txId);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(result));
-    }
-    if (url.pathname === '/api/operation' && req.method === 'POST') {
-      const result = await addOperation(JSON.parse(await readBody(req)));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(result));
-    }
-    if (url.pathname === '/api/transfer' && req.method === 'POST') {
-      const result = await addTransfer(JSON.parse(await readBody(req)));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(result));
-    }
-    if (url.pathname === '/api/networth-history') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(await networthHistory(base)));
-    }
-    if (url.pathname === '/api/categorize' && req.method === 'POST') {
-      const body = JSON.parse(await readBody(req));
-      const result = await categorize(body);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(result));
-    }
-    // static
-    const p = url.pathname === '/' ? '/index.html' : url.pathname;
-    const file = normalize(join(STATIC_DIR, p));
-    if (!file.startsWith(normalize(STATIC_DIR))) throw new Error('path');
     const body = await readFile(file);
     res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
-    res.end(body);
+    return res.end(body);
   } catch (e) {
-    if (e.code === 'ENOENT') {
-      // SPA fallback
-      try {
-        const body = await readFile(join(STATIC_DIR, 'index.html'));
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        return res.end(body);
-      } catch {}
-    }
-    console.error(e);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: String(e.message || e) }));
+    if (e.code !== 'ENOENT') throw e;
+    // SPA fallback
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    return res.end(await readFile(join(STATIC_DIR, 'index.html')));
   }
-}).listen(PORT, () => console.log(`dashboard on :${PORT}`));
+}
+
+const json = (res, status, data) => {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+};
+
+async function handle(req, res) {
+  const url = new URL(req.url, 'http://x');
+  try {
+    if (url.pathname === '/enablebanking/auth_callback') return await authCallback(url.searchParams, req, res);
+    const handler = routes[`${req.method} ${url.pathname}`];
+    if (!handler) {
+      if (url.pathname.startsWith('/api/')) throw new HttpError(404, 'not found');
+      return await serveStatic(url.pathname, res);
+    }
+    const base = (url.searchParams.get('base') || 'PLN').toUpperCase();
+    if (!BASES.has(base)) throw bad('base must be PLN|EUR|USD|CHF');
+    const body = req.method === 'POST' ? await readBody(req) : undefined;
+    json(res, 200, await handler({ q: url.searchParams, base, body, req }));
+  } catch (e) {
+    if (!e.status) console.error(e);
+    json(res, e.status || 500, { error: String(e.message || e) });
+  }
+}
+
+createServer(handle).listen(PORT, '127.0.0.1', () => console.log(`dashboard on ${PUBLIC_URL}`));
+
+// https-вход только ради redirect URL Enable Banking: самоподписанный сертификат на localhost
+if (HTTPS_PORT) {
+  const dir = join(ROOT, 'data/tls');
+  const key = join(dir, 'localhost-key.pem');
+  const cert = join(dir, 'localhost.pem');
+  if (!existsSync(cert)) {
+    mkdirSync(dir, { recursive: true });
+    execFileSync('/usr/bin/openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
+      '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+      '-keyout', key, '-out', cert], { stdio: 'ignore' });
+  }
+  createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, handle).listen(HTTPS_PORT, '127.0.0.1', () =>
+    console.log(`https on :${HTTPS_PORT}`),
+  );
+}
+
+if (AUTO_SYNC_TIMES.length && process.env.AUTO_SYNC !== 'off') {
+  setTimeout(autoSyncTick, 30_000);
+  setInterval(autoSyncTick, 5 * 60_000);
+}

@@ -4,7 +4,12 @@
     {
       "name": "dashboard-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "dashboard/web"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "dashboard/web"
+      ],
       "port": 5173
     }
   ]

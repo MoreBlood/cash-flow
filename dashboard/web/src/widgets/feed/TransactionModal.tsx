@@ -1,9 +1,19 @@
 import { CategorySelect } from '@features/categorize/CategorySelect';
-import { Badge, Button, Dialog, Flex, Separator, Text } from '@radix-ui/themes';
-import { excludeTransaction } from '@shared/api/client';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Dialog,
+  Flex,
+  Separator,
+  Text,
+  TextArea,
+  TextField,
+} from '@radix-ui/themes';
+import { deleteTransaction, excludeTransaction, updateTransaction } from '@shared/api/client';
 import type { Category, FeedTx } from '@shared/api/types';
 import { moneyExact } from '@shared/lib/format';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const nativeFmt = (v: number, cur: string) =>
   new Intl.NumberFormat('pl-PL', {
@@ -35,18 +45,46 @@ interface Props {
 
 export function TransactionModal({ tx, catalog, period, onChanged, onClose }: Props) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ payee: '', notes: '', date: '', amount: '' });
+  useEffect(() => {
+    if (tx) setForm({ payee: tx.payee, notes: tx.notes, date: tx.date, amount: String(tx.native) });
+    setError(null);
+  }, [tx]);
   if (!tx) return null;
   const positive = tx.amount >= 0;
 
-  const exclude = () => {
+  const act = (p: Promise<unknown>) => {
     setBusy(true);
-    excludeTransaction(tx.id)
-      .then(() => {
-        onChanged();
-        onClose();
-      })
+    setError(null);
+    p.then(() => {
+      onChanged();
+      onClose();
+    })
+      .catch((e) => setError(String(e.message || e)))
       .finally(() => setBusy(false));
   };
+  const exclude = () => act(excludeTransaction(tx.id));
+  const remove = () => act(deleteTransaction(tx.id));
+
+  const dirty =
+    form.payee.trim() !== tx.payee ||
+    form.notes.trim() !== tx.notes ||
+    (tx.manual && (form.date !== tx.date || Number(form.amount) !== tx.native));
+  const save = () =>
+    act(
+      updateTransaction({
+        id: tx.id,
+        payee: form.payee,
+        notes: form.notes,
+        ...(tx.manual ? { date: form.date, amount: Number(form.amount) } : {}),
+      }),
+    );
+  const field = (k: keyof typeof form) => ({
+    value: form[k],
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      setForm({ ...form, [k]: e.target.value }),
+  });
 
   return (
     <Dialog.Root open={!!tx} onOpenChange={(o) => !o && onClose()}>
@@ -74,6 +112,11 @@ export function TransactionModal({ tx, catalog, period, onChanged, onClose }: Pr
         </Flex>
         <Separator size="4" mb="2" />
         <Row label="Дата">
+          {tx.pending && (
+            <Badge variant="soft" color="amber">
+              в обработке
+            </Badge>
+          )}
           <Text size="2">{new Date(tx.date).toLocaleDateString('ru')}</Text>
         </Row>
         <Row label="Счёт">
@@ -97,13 +140,36 @@ export function TransactionModal({ tx, catalog, period, onChanged, onClose }: Pr
             </Badge>
           )}
         </Row>
-        {tx.notes && (
-          <Row label="Заметка">
-            <Text size="2" style={{ maxWidth: 240, textAlign: 'right' }}>
-              {tx.notes}
+
+        <Separator size="4" my="3" />
+        <Flex direction="column" gap="2">
+          <TextField.Root size="2" placeholder="Получатель" {...field('payee')} />
+          <TextArea size="2" placeholder="Заметка" rows={2} {...field('notes')} />
+          {tx.manual && (
+            <Flex gap="2">
+              <TextField.Root size="2" type="date" style={{ flex: 1 }} {...field('date')} />
+              <TextField.Root
+                size="2"
+                type="number"
+                step="0.01"
+                style={{ flex: 1 }}
+                {...field('amount')}
+              >
+                <TextField.Slot side="right">{tx.currency}</TextField.Slot>
+              </TextField.Root>
+            </Flex>
+          )}
+          {dirty && (
+            <Button disabled={busy} onClick={save}>
+              Сохранить
+            </Button>
+          )}
+          {error && (
+            <Text size="1" color="red">
+              {error}
             </Text>
-          </Row>
-        )}
+          )}
+        </Flex>
 
         <Separator size="4" my="3" />
         <Flex direction="column" gap="2">
@@ -126,6 +192,34 @@ export function TransactionModal({ tx, catalog, period, onChanged, onClose }: Pr
             <Button variant="soft" color="gray" disabled={busy} onClick={exclude}>
               Исключить из аналитики
             </Button>
+          )}
+          {tx.manual && (
+            <AlertDialog.Root>
+              <AlertDialog.Trigger>
+                <Button variant="soft" color="red" disabled={busy}>
+                  Удалить операцию
+                </Button>
+              </AlertDialog.Trigger>
+              <AlertDialog.Content maxWidth="400px">
+                <AlertDialog.Title>Удалить операцию?</AlertDialog.Title>
+                <AlertDialog.Description size="2">
+                  {tx.payee}, {nativeFmt(tx.native, tx.currency)} — баланс счёта «{tx.account}»
+                  изменится. Отменить нельзя.
+                </AlertDialog.Description>
+                <Flex gap="3" justify="end" mt="4">
+                  <AlertDialog.Cancel>
+                    <Button variant="soft" color="gray">
+                      Отмена
+                    </Button>
+                  </AlertDialog.Cancel>
+                  <AlertDialog.Action>
+                    <Button color="red" onClick={remove}>
+                      Удалить
+                    </Button>
+                  </AlertDialog.Action>
+                </Flex>
+              </AlertDialog.Content>
+            </AlertDialog.Root>
           )}
         </Flex>
 

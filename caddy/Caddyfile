@@ -1,8 +1,0 @@
-{
-	local_certs
-}
-
-localhost:5443 {
-	tls internal
-	reverse_proxy actual-server:5006
-}

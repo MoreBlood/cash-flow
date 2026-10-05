@@ -1,9 +1,13 @@
 import type {
   AccountRef,
+  Aspsp,
   Balances,
+  Bank,
   Category,
   Meta,
   NetWorthHistory,
+  Rule,
+  RuleCondition,
   Settings,
   Summary,
   TransactionsResponse,
@@ -78,12 +82,14 @@ export interface SyncStatus {
   lastAttemptAt?: string | null;
   /** счета, не синкнувшиеся в последней попытке (напр. истекло согласие банка) */
   failedAccounts?: string[];
+  /** согласия банков, которые кончились или кончатся в ближайшие 14 дней */
+  expiring?: { bank: string; consentUntil: string }[];
   syncing: boolean;
 }
 
 export const fetchSyncStatus = () => get<SyncStatus>('/api/sync-status');
 
-export async function triggerBankSync(): Promise<Omit<SyncStatus, 'syncing'>> {
+export async function triggerBankSync(): Promise<Omit<SyncStatus, 'syncing' | 'expiring'>> {
   const res = await fetch('/api/bank-sync', { method: 'POST' });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
@@ -109,3 +115,48 @@ export async function categorize(
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }
+
+// --- операции ---
+export const updateTransaction = (b: {
+  id: string;
+  payee?: string;
+  notes?: string;
+  date?: string;
+  amount?: number;
+}) => post<{ ok: boolean }>('/api/transaction/update', b);
+
+export const deleteTransaction = (id: string) =>
+  post<{ ok: boolean }>('/api/transaction/delete', { id });
+
+// --- категории ---
+export const createCategory = (b: { name: string; groupId?: string; groupName?: string }) =>
+  post<Category>('/api/categories', b);
+
+export const renameCategory = (id: string, name: string) =>
+  post<{ ok: boolean }>('/api/categories/rename', { id, name });
+
+export const deleteCategory = (id: string, replaceWith: string | null) =>
+  post<{ moved: number }>('/api/categories/delete', { id, replaceWith });
+
+// --- правила ---
+export const fetchRules = () => get<Rule[]>('/api/rules');
+
+export const saveRule = (b: {
+  id?: string;
+  conditionsOp: 'and' | 'or';
+  conditions: RuleCondition[];
+  categoryId: string;
+}) => post<{ id: string }>('/api/rules', b);
+
+export const deleteRule = (id: string) => post<{ ok: boolean }>('/api/rules/delete', { id });
+
+export const applyRules = () => post<{ updated: number }>('/api/rules/apply', {});
+
+// --- банки ---
+export const fetchBanks = () => get<Bank[]>('/api/banks');
+
+export const fetchAspsps = (country = 'PL') => get<Aspsp[]>(`/api/banks/aspsps?country=${country}`);
+
+/** → URL авторизации в банке (согласие на максимальный срок, до 180 дней) */
+export const connectBank = (aspsp: string, country = 'PL') =>
+  post<{ url: string; days: number }>('/api/banks/connect', { aspsp, country });

@@ -1,8 +1,11 @@
 import { AlertDialog, Button, Flex, Select, Text } from '@radix-ui/themes';
-import { type CategorizePayload, categorize } from '@shared/api/client';
+import { type CategorizePayload, categorize, emitRefresh } from '@shared/api/client';
 import type { Category } from '@shared/api/types';
 import { categoryStyle } from '@shared/config/categories';
 import { useMemo, useState } from 'react';
+import { NewCategoryDialog } from './NewCategoryDialog';
+
+const NEW = '__new__';
 
 interface Props {
   catalog: Category[];
@@ -18,6 +21,7 @@ interface Props {
 export function CategorySelect({ catalog, txId, payee, period, onDone }: Props) {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Category | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const groups = useMemo(() => {
     const m = new Map<string, Category[]>();
@@ -36,12 +40,16 @@ export function CategorySelect({ catalog, txId, payee, period, onDone }: Props) 
       .finally(() => setBusy(false));
   };
 
-  const pick = (categoryId: string) => {
-    const cat = catalog.find((c) => c.id === categoryId);
-    if (!cat) return;
+  const choose = (cat: Category) => {
     if (payee)
       setPending(cat); // спросить охват
-    else if (txId) run({ txId, categoryId });
+    else if (txId) run({ txId, categoryId: cat.id });
+  };
+
+  const pick = (categoryId: string) => {
+    if (categoryId === NEW) return setCreating(true);
+    const cat = catalog.find((c) => c.id === categoryId);
+    if (cat) choose(cat);
   };
 
   return (
@@ -64,8 +72,21 @@ export function CategorySelect({ catalog, txId, payee, period, onDone }: Props) 
               ))}
             </Select.Group>
           ))}
+          <Select.Separator />
+          <Select.Item value={NEW}>+ Новая категория…</Select.Item>
         </Select.Content>
       </Select.Root>
+
+      <NewCategoryDialog
+        open={creating}
+        catalog={catalog}
+        onClose={() => setCreating(false)}
+        onCreated={(c) => {
+          setCreating(false);
+          emitRefresh(); // страницы перечитают справочник категорий
+          choose(c);
+        }}
+      />
 
       <AlertDialog.Root open={pending !== null} onOpenChange={(o) => !o && setPending(null)}>
         <AlertDialog.Content maxWidth="440px">
@@ -106,8 +127,8 @@ export function CategorySelect({ catalog, txId, payee, period, onDone }: Props) 
             </AlertDialog.Cancel>
           </Flex>
           <Text size="1" color="gray" mt="3" as="div">
-            «Все прошлые и будущие» обновит всю историю мерчанта и создаст правило в Actual — новые
-            транзакции из банка будут категоризироваться автоматически.
+            «Все прошлые и будущие» обновит всю историю мерчанта и создаст правило — новые операции
+            из банка будут категоризироваться автоматически.
           </Text>
         </AlertDialog.Content>
       </AlertDialog.Root>

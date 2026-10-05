@@ -1,22 +1,11 @@
-import {
-  Badge,
-  Button,
-  Callout,
-  Card,
-  Container,
-  Flex,
-  Heading,
-  Select,
-  Spinner,
-  Table,
-  Text,
-} from '@radix-ui/themes';
-import { fetchAccounts, fetchCategories, fetchSettings, saveSettings } from '@shared/api/client';
-import type { AccountRef, Category, Settings } from '@shared/api/types';
+import { Button, Card, Container, Flex, Heading, Select, Spinner, Text } from '@radix-ui/themes';
+import { fetchCategories, fetchSettings, saveSettings } from '@shared/api/client';
+import type { Category, Settings } from '@shared/api/types';
 import { categoryStyle } from '@shared/config/categories';
+import { CategoriesCard } from '@widgets/settings/CategoriesCard';
+import { RulesCard } from '@widgets/settings/RulesCard';
 import { useEffect, useMemo, useState } from 'react';
 
-const CURRENCIES = ['PLN', 'USD', 'EUR', 'CHF'];
 const NONE = '__none__';
 
 function CategoryPicker({
@@ -51,17 +40,16 @@ function CategoryPicker({
 export function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [catalog, setCatalog] = useState<Category[]>([]);
-  const [accounts, setAccounts] = useState<AccountRef[]>([]);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadCatalog = () => fetchCategories().then(setCatalog);
   useEffect(() => {
-    Promise.all([fetchSettings(), fetchCategories(), fetchAccounts()])
-      .then(([s, c, a]) => {
+    Promise.all([fetchSettings(), fetchCategories()])
+      .then(([s, c]) => {
         setSettings(s);
         setCatalog(c);
-        setAccounts(a);
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -90,12 +78,6 @@ export function SettingsPage() {
     );
 
   const patch = (p: Partial<Settings>) => setSettings({ ...settings, ...p });
-  const setCurrency = (accountId: string, cur: string, detected: string) => {
-    const next = { ...settings.accountCurrencies };
-    if (cur === detected) delete next[accountId];
-    else next[accountId] = cur;
-    patch({ accountCurrencies: next });
-  };
 
   const save = () => {
     setBusy(true);
@@ -181,55 +163,8 @@ export function SettingsPage() {
           </Flex>
         </Card>
 
-        <Card size="3">
-          <Heading size="4" mb="1">
-            Валюты счетов
-          </Heading>
-          <Text size="2" color="gray" as="div" mb="3">
-            По умолчанию валюта определяется по названию счёта. Здесь можно задать явно.
-          </Text>
-          <Table.Root size="1">
-            <Table.Body>
-              {accounts.map((a) => (
-                <Table.Row key={a.id}>
-                  <Table.Cell>
-                    <Flex gap="2" align="center">
-                      <Text size="2">{a.name}</Text>
-                      {settings.accountCurrencies[a.id] && (
-                        <Badge size="1" variant="soft" color="iris">
-                          вручную
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                  <Table.Cell align="right">
-                    <Select.Root
-                      size="1"
-                      value={settings.accountCurrencies[a.id] || a.currency}
-                      onValueChange={(v) => setCurrency(a.id, v, a.currency)}
-                    >
-                      <Select.Trigger variant="soft" />
-                      <Select.Content>
-                        {CURRENCIES.map((c) => (
-                          <Select.Item key={c} value={c}>
-                            {c}
-                          </Select.Item>
-                        ))}
-                      </Select.Content>
-                    </Select.Root>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
-        </Card>
-
-        <Callout.Root color="gray" size="1">
-          <Callout.Text>
-            Базовая валюта отображения (PLN/USD/EUR/CHF) выбирается в шапке и хранится в браузере.
-            Пароль сервера и Sync ID бюджета задаются в файле <code>.env</code>.
-          </Callout.Text>
-        </Callout.Root>
+        <CategoriesCard catalog={catalog} onChanged={loadCatalog} />
+        <RulesCard catalog={catalog} />
       </Flex>
     </Container>
   );

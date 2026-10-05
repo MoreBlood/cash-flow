@@ -6,6 +6,7 @@ import {
   useBaseCurrency,
 } from '@app/currency';
 import { SyncButton } from '@features/sync/SyncButton';
+import { BanksPage } from '@pages/banks/BanksPage';
 import { CapitalPage } from '@pages/capital/CapitalPage';
 import { DashboardPage } from '@pages/dashboard/DashboardPage';
 import { SettingsPage } from '@pages/settings/SettingsPage';
@@ -29,6 +30,9 @@ function Nav() {
               </TabNav.Link>
               <TabNav.Link asChild active={pathname === '/capital'}>
                 <Link to="/capital">Капитал</Link>
+              </TabNav.Link>
+              <TabNav.Link asChild active={pathname === '/banks'}>
+                <Link to="/banks">Банки</Link>
               </TabNav.Link>
             </TabNav.Root>
             <Select.Root size="2" value={base} onValueChange={(v) => setBase(v as BaseCurrency)}>
@@ -66,6 +70,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/capital" element={<CapitalPage />} />
+            <Route path="/banks" element={<BanksPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </BrowserRouter>

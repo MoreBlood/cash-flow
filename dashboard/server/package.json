@@ -1,8 +1,11 @@
 {
-  "name": "cashflow-dashboard-server",
+  "name": "cashflow-server",
   "private": true,
   "type": "module",
-  "dependencies": {
-    "@actual-app/api": "^26.7.0"
+  "description": "Свой бэкенд: SQLite (node:sqlite) + Enable Banking + курсы НБП. Без зависимостей.",
+  "engines": { "node": ">=22.16" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "migrate-actual": "node --disable-warning=ExperimentalWarning scripts/migrate-actual.mjs"
   }
 }
