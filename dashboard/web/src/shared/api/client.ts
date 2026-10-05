@@ -73,13 +73,17 @@ export const addTransfer = (b: {
 }) => post<{ ok: boolean }>('/api/transfer', b);
 
 export interface SyncStatus {
+  /** последний синк, в котором прошли все счета */
   lastBankSyncAt: string | null;
+  lastAttemptAt?: string | null;
+  /** счета, не синкнувшиеся в последней попытке (напр. истекло согласие банка) */
+  failedAccounts?: string[];
   syncing: boolean;
 }
 
 export const fetchSyncStatus = () => get<SyncStatus>('/api/sync-status');
 
-export async function triggerBankSync(): Promise<{ lastBankSyncAt: string | null }> {
+export async function triggerBankSync(): Promise<Omit<SyncStatus, 'syncing'>> {
   const res = await fetch('/api/bank-sync', { method: 'POST' });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();

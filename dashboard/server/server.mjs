@@ -98,21 +98,29 @@ async function runBankSync() {
   if (bankSyncing) return { alreadyRunning: true, ...readSyncState() };
   bankSyncing = true;
   try {
-    // @actual-app/api синкает ВСЕ счета, копит ошибки и бросает первую в самом конце —
-    // уже после того, как транзакции импортированы. Поэтому ошибку запоминаем,
-    // иначе один сбойный счёт молча отменяет и отметку времени, и бэкап в iCloud.
-    let warning = null;
-    try {
-      await api.runBankSync();
-    } catch (e) {
-      warning = e?.message || String(e);
-      console.error('[bank-sync] частичная ошибка (импорт мог пройти):', warning);
+    // Синкаем по одному счёту: пакетный api.runBankSync() бросает только первую ошибку,
+    // и по ней не отличить один сбойный счёт от «упали все» (истёкшее согласие PSD2).
+    const failedAccounts = [];
+    for (const a of await api.getAccounts()) {
+      if (a.closed) continue;
+      try {
+        await api.runBankSync({ accountId: a.id });
+      } catch (e) {
+        failedAccounts.push(a.name);
+        console.error(`[bank-sync] ${a.name}:`, e?.message || e);
+      }
     }
     await api.sync();
     lastSync = Date.now();
-    const state = { lastBankSyncAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    // «обновлено» — только когда синкнулось всё; при сбое прошлую отметку не трогаем,
+    // а список упавших счетов показываем в шапке
+    const state = {
+      lastBankSyncAt: failedAccounts.length ? (readSyncState().lastBankSyncAt ?? null) : now,
+      lastAttemptAt: now,
+      failedAccounts,
+    };
     await writeFile(SYNC_STATE, JSON.stringify(state)).catch(() => {});
-    if (warning) state.warning = warning;
     // копия в iCloud — не валим синк, если бэкап не удался
     const arc = await backupToICloud().catch((e) => {
       console.error('[backup] не удалось:', e?.message || e);
