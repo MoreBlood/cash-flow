@@ -1,3 +1,4 @@
+import { UpdateIcon } from '@radix-ui/react-icons';
 import {
   Badge,
   Button,
@@ -8,13 +9,12 @@ import {
   Heading,
   Select,
   Spinner,
-  Table,
   Text,
 } from '@radix-ui/themes';
 import { connectBank, fetchAspsps, fetchBanks, fetchSetup, type Setup } from '@shared/api/client';
 import type { Aspsp, Bank, BankAccount } from '@shared/api/types';
-import { EbSetupCard } from '@widgets/banks/EbSetupCard';
 import { relativeTime } from '@shared/lib/format';
+import { EbSetupCard } from '@widgets/banks/EbSetupCard';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -141,35 +141,38 @@ export function BanksPage() {
                   <ConsentBadge bank={b} />
                 </Flex>
                 <Button variant="soft" disabled={!!busy} onClick={() => connect(b.name)}>
-                  {busy === b.name ? <Spinner size="1" /> : '↻'} Переподключить
+                  {busy === b.name ? <Spinner size="1" /> : <UpdateIcon />} Переподключить
                 </Button>
               </Flex>
-              <Table.Root size="1">
-                <Table.Body>
-                  {b.accounts.map((a) => (
-                    <Table.Row key={a.id}>
-                      <Table.Cell>
-                        <Flex direction="column">
-                          <Text size="2">{a.name}</Text>
-                          {a.iban && (
-                            <Text size="1" color="gray">
-                              {a.iban.slice(0, 4)} … {a.iban.slice(-4)}
-                            </Text>
-                          )}
-                        </Flex>
-                      </Table.Cell>
-                      <Table.Cell align="right">
-                        <Text size="2" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {a.bankBalance == null ? '—' : nativeFmt(a.bankBalance, a.currency)}
+              <Flex direction="column">
+                {b.accounts.map((a) => (
+                  <Flex
+                    key={a.id}
+                    justify="between"
+                    align="center"
+                    gap="3"
+                    py="2"
+                    style={{ borderTop: '1px solid var(--gray-4)' }}
+                  >
+                    <Flex direction="column" minWidth="0">
+                      <Text size="2" weight="medium" truncate>
+                        {a.name}
+                      </Text>
+                      {a.iban && (
+                        <Text size="1" color="gray">
+                          {a.iban.slice(0, 4)} … {a.iban.slice(-4)}
                         </Text>
-                      </Table.Cell>
-                      <Table.Cell align="right">
-                        <AccountStatus a={a} />
-                      </Table.Cell>
-                    </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table.Root>
+                      )}
+                    </Flex>
+                    <Flex direction="column" align="end" flexShrink="0">
+                      <Text size="2" weight="medium" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {a.bankBalance == null ? '—' : nativeFmt(a.bankBalance, a.currency)}
+                      </Text>
+                      <AccountStatus a={a} />
+                    </Flex>
+                  </Flex>
+                ))}
+              </Flex>
             </Card>
           ))
         )}

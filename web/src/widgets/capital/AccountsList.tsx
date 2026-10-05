@@ -37,7 +37,12 @@ export function AccountsList({
               onClick={onPick ? () => onPick(a) : undefined}
             >
               <Flex justify="between" align="center" gap="2">
-                <Flex gap="2" align="center" minWidth="0">
+                <Flex
+                  direction={{ initial: 'column', sm: 'row' }}
+                  gap={{ initial: '1', sm: '2' }}
+                  align={{ initial: 'start', sm: 'center' }}
+                  minWidth="0"
+                >
                   <Text size="3" weight="medium" truncate>
                     {a.name}
                   </Text>

@@ -1,4 +1,15 @@
-import { Button, Card, Container, Flex, Heading, Select, Spinner, Text } from '@radix-ui/themes';
+import { ExitIcon } from '@radix-ui/react-icons';
+import {
+  Box,
+  Button,
+  Card,
+  Container,
+  Flex,
+  Heading,
+  Select,
+  Spinner,
+  Text,
+} from '@radix-ui/themes';
 import {
   fetchCategories,
   fetchSettings,
@@ -7,12 +18,14 @@ import {
   saveSettings,
 } from '@shared/api/client';
 import type { Category, Settings } from '@shared/api/types';
+import { authClient } from '@shared/auth/client';
 import { categoryStyle } from '@shared/config/categories';
 import { CategoriesCard } from '@widgets/settings/CategoriesCard';
 import { DataTransferCard } from '@widgets/settings/DataTransferCard';
 import { McpCard } from '@widgets/settings/McpCard';
 import { RulesCard } from '@widgets/settings/RulesCard';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const NONE = '__none__';
 
@@ -52,6 +65,7 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const loadCatalog = () => fetchCategories().then(setCatalog);
   useEffect(() => {
@@ -177,6 +191,20 @@ export function SettingsPage() {
         <DataTransferCard />
         <CategoriesCard catalog={catalog} onChanged={loadCatalog} />
         <RulesCard catalog={catalog} />
+        {/* на десктопе «Выйти» — в шапке */}
+        {setup?.auth && (
+          <Box display={{ initial: 'block', sm: 'none' }}>
+            <Button
+              size="3"
+              variant="soft"
+              color="red"
+              style={{ width: '100%' }}
+              onClick={() => authClient.signOut().then(() => navigate('/sign-in'))}
+            >
+              <ExitIcon /> Выйти ({setup.login})
+            </Button>
+          </Box>
+        )}
       </Flex>
     </Container>
   );

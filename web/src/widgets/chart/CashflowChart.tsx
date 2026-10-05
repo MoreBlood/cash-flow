@@ -105,6 +105,7 @@ export function CashflowChart({ daily, base, catalog, reloadKey, onChanged }: Pr
               stroke="var(--gray-8)"
               fontSize={12}
               tickLine={false}
+              minTickGap={24}
             />
             <YAxis
               stroke="var(--gray-8)"

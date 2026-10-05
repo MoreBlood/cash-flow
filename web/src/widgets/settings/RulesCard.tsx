@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Flex,
+  Grid,
   Heading,
   IconButton,
   Select,
@@ -178,25 +179,27 @@ export function RulesCard({ catalog }: { catalog: Category[] }) {
         mb="2"
       />
       <Box style={{ maxHeight: 420, overflowY: 'auto' }}>
-        <Flex direction="column" gap="1" pr="3">
+        <Flex direction="column" gap="1" pr={{ initial: '0', sm: '3' }}>
           {shown.map((r) => (
-            <Flex
+            // телефон: условие во всю ширину, под ним — совпадения и категория в одну строку
+            <Grid
               key={r.id}
-              justify="between"
+              columns="1fr auto"
+              areas={{ initial: '"cond cond" "matches ctrl"', sm: '"cond ctrl" "matches ctrl"' }}
               align="center"
-              gap="2"
-              py="1"
+              gapX="2"
+              py="2"
               style={{ borderBottom: '1px solid var(--gray-3)' }}
             >
-              <Flex direction="column" style={{ flex: 1, minWidth: 0 }}>
-                <Text size="2" truncate>
+              <Box gridArea="cond" minWidth="0">
+                <Text size="2" truncate as="div">
                   {r.conditions.map(condText).join(r.conditionsOp === 'or' ? ' или ' : ' и ')}
                 </Text>
-                <Text size="1" color="gray">
-                  совпадений в истории: {r.matches}
-                </Text>
-              </Flex>
-              <Flex align="center" gap="2" flexShrink="0">
+              </Box>
+              <Text size="1" color="gray" style={{ gridArea: 'matches' }}>
+                совпадений в истории: {r.matches}
+              </Text>
+              <Flex gridArea="ctrl" align="center" justify="end" gap="2">
                 <CategoryPicker
                   catalog={catalog}
                   value={r.categoryId}
@@ -223,7 +226,7 @@ export function RulesCard({ catalog }: { catalog: Category[] }) {
                   </IconButton>
                 )}
               </Flex>
-            </Flex>
+            </Grid>
           ))}
           {!shown.length && (
             <Badge color="gray" variant="soft">

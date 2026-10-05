@@ -1,4 +1,5 @@
 import '@radix-ui/themes/styles.css';
+import './app.css';
 import {
   BASE_CURRENCIES,
   type BaseCurrency,
@@ -14,6 +15,13 @@ import { DashboardPage } from '@pages/dashboard/DashboardPage';
 import { SettingsPage } from '@pages/settings/SettingsPage';
 import { SetupPage } from '@pages/setup/SetupPage';
 import {
+  BarChartIcon,
+  CardStackIcon,
+  ExitIcon,
+  GearIcon,
+  PieChartIcon,
+} from '@radix-ui/react-icons';
+import {
   Box,
   Container,
   Flex,
@@ -27,7 +35,21 @@ import {
 import { fetchSetup, type Setup } from '@shared/api/client';
 import { authClient } from '@shared/auth/client';
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import {
+  BrowserRouter,
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
+
+const NAV = [
+  { to: '/', label: 'Cash Flow', Icon: BarChartIcon },
+  { to: '/capital', label: 'Капитал', Icon: PieChartIcon },
+  { to: '/banks', label: 'Банки', Icon: CardStackIcon },
+];
 
 function Nav() {
   const { pathname } = useLocation();
@@ -40,25 +62,26 @@ function Nav() {
       .catch(() => {});
   }, []);
   return (
-    <Box style={{ borderBottom: '1px solid var(--gray-4)' }}>
-      <Container size="4" px={{ initial: '3', sm: '4' }} py="3">
+    <Box className="top-bar">
+      <Container size="4" px={{ initial: '3', sm: '4' }} py={{ initial: '2', sm: '3' }}>
         <Flex justify="between" align="center" gap="3" wrap="wrap">
-          <Heading size={{ initial: '5', sm: '6' }}>💸 Финансы</Heading>
-          <Flex gap="3" align="center" wrap="wrap">
+          <Heading size={{ initial: '4', sm: '6' }} style={{ whiteSpace: 'nowrap' }}>
+            💸 Финансы
+          </Heading>
+          <Flex gap="3" align="center" wrap="wrap" minWidth="0">
             <SyncButton />
-            <TabNav.Root>
-              <TabNav.Link asChild active={pathname === '/'}>
-                <Link to="/">Cash Flow</Link>
-              </TabNav.Link>
-              <TabNav.Link asChild active={pathname === '/capital'}>
-                <Link to="/capital">Капитал</Link>
-              </TabNav.Link>
-              <TabNav.Link asChild active={pathname === '/banks'}>
-                <Link to="/banks">Банки</Link>
-              </TabNav.Link>
-            </TabNav.Root>
+            {/* на телефоне разделы — в нижнем таб-баре */}
+            <Box display={{ initial: 'none', sm: 'block' }}>
+              <TabNav.Root>
+                {NAV.map(({ to, label }) => (
+                  <TabNav.Link key={to} asChild active={pathname === to}>
+                    <Link to={to}>{label}</Link>
+                  </TabNav.Link>
+                ))}
+              </TabNav.Root>
+            </Box>
             <Select.Root size="2" value={base} onValueChange={(v) => setBase(v as BaseCurrency)}>
-              <Select.Trigger variant="soft" />
+              <Select.Trigger variant="soft" radius="full" />
               <Select.Content>
                 {BASE_CURRENCIES.map((c) => (
                   <Select.Item key={c} value={c}>
@@ -67,30 +90,48 @@ function Nav() {
                 ))}
               </Select.Content>
             </Select.Root>
-            <IconButton
-              size="2"
-              variant={pathname === '/settings' ? 'solid' : 'soft'}
-              color="gray"
-              title="Настройки"
-              onClick={() => navigate('/settings')}
-            >
-              ⚙
-            </IconButton>
-            {setup?.auth && (
+            <Flex gap="3" display={{ initial: 'none', sm: 'flex' }}>
               <IconButton
                 size="2"
-                variant="soft"
+                variant={pathname === '/settings' ? 'solid' : 'soft'}
                 color="gray"
-                title={`Выйти (${setup.login})`}
-                onClick={() => authClient.signOut().then(() => navigate('/sign-in'))}
+                title="Настройки"
+                onClick={() => navigate('/settings')}
               >
-                ⎋
+                <GearIcon />
               </IconButton>
-            )}
+              {setup?.auth && (
+                <IconButton
+                  size="2"
+                  variant="soft"
+                  color="gray"
+                  title={`Выйти (${setup.login})`}
+                  onClick={() => authClient.signOut().then(() => navigate('/sign-in'))}
+                >
+                  <ExitIcon />
+                </IconButton>
+              )}
+            </Flex>
           </Flex>
         </Flex>
       </Container>
     </Box>
+  );
+}
+
+/** Таб-бар внизу экрана на телефоне (на десктопе скрыт стилями). */
+function BottomNav() {
+  return (
+    <nav className="bottom-nav">
+      {[...NAV, { to: '/settings', label: 'Настройки', Icon: GearIcon }].map(
+        ({ to, label, Icon }) => (
+          <NavLink key={to} to={to} end>
+            <Icon width={22} height={22} />
+            {label}
+          </NavLink>
+        ),
+      )}
+    </nav>
   );
 }
 
@@ -127,12 +168,15 @@ export function App() {
                 element={
                   <>
                     <Nav />
-                    <Routes>
-                      <Route path="/" element={<DashboardPage />} />
-                      <Route path="/capital" element={<CapitalPage />} />
-                      <Route path="/banks" element={<BanksPage />} />
-                      <Route path="/settings" element={<SettingsPage />} />
-                    </Routes>
+                    <Box className="app-main">
+                      <Routes>
+                        <Route path="/" element={<DashboardPage />} />
+                        <Route path="/capital" element={<CapitalPage />} />
+                        <Route path="/banks" element={<BanksPage />} />
+                        <Route path="/settings" element={<SettingsPage />} />
+                      </Routes>
+                    </Box>
+                    <BottomNav />
                   </>
                 }
               />

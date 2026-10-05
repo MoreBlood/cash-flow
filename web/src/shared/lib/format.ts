@@ -51,8 +51,10 @@ export const moneyExact = (v: number) => fmts().exact.format(z(v));
 export const signed = (v: number) =>
   z(v) > 0 ? `+${fmts().short.format(v)}` : fmts().short.format(z(v));
 
-export const monthLabel = (ym: string) =>
-  new Date(`${ym}-01`).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
+export const monthLabel = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
+};
 
 export const shortDate = (d: string) =>
   new Date(d).toLocaleDateString('ru', { day: 'numeric', month: 'short' });

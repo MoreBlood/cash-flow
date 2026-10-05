@@ -1,5 +1,16 @@
 import { useBaseCurrency } from '@app/currency';
-import { Button, Card, Container, Flex, Grid, Heading, Spinner, Text } from '@radix-ui/themes';
+import { PlusIcon } from '@radix-ui/react-icons';
+import {
+  Button,
+  Card,
+  Container,
+  Flex,
+  Grid,
+  Heading,
+  IconButton,
+  Spinner,
+  Text,
+} from '@radix-ui/themes';
 import {
   fetchAccounts,
   fetchBalances,
@@ -120,7 +131,42 @@ export function CapitalPage() {
           onChanged={refresh}
           onClose={() => setAccountView(null)}
         />
-        <Flex justify="between" align="center" wrap="wrap" gap="3">
+        {/* телефон: крупная сумма по центру и круглая кнопка действия — как баланс в Revolut */}
+        <Flex
+          direction="column"
+          align="center"
+          gap="1"
+          py="2"
+          display={{ initial: 'flex', sm: 'none' }}
+        >
+          <Text size="2" color="gray">
+            Капитал · {base}
+          </Text>
+          <Text size="8" weight="bold" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {money(data.totalPln)}
+          </Text>
+          <Flex direction="column" align="center" gap="1" mt="3">
+            <IconButton
+              size="4"
+              radius="full"
+              variant="soft"
+              aria-label="Новая операция"
+              onClick={() => openOp()}
+            >
+              <PlusIcon width={22} height={22} />
+            </IconButton>
+            <Text size="1" color="gray">
+              Операция
+            </Text>
+          </Flex>
+        </Flex>
+        <Flex
+          justify="between"
+          align="center"
+          wrap="wrap"
+          gap="3"
+          display={{ initial: 'none', sm: 'flex' }}
+        >
           <Flex align="center" gap="3">
             <Heading size={{ initial: '6', sm: '7' }}>Капитал</Heading>
             <Button size="2" variant="solid" onClick={() => openOp()}>

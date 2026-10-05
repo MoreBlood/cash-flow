@@ -1,4 +1,5 @@
-import { Button, Flex, Link, Spinner, Text, Tooltip } from '@radix-ui/themes';
+import { UpdateIcon } from '@radix-ui/react-icons';
+import { Box, Button, Flex, IconButton, Link, Spinner, Text, Tooltip } from '@radix-ui/themes';
 import { emitRefresh, fetchSyncStatus, type SyncStatus, triggerBankSync } from '@shared/api/client';
 import { relativeTime } from '@shared/lib/format';
 import { useEffect, useRef, useState } from 'react';
@@ -105,15 +106,31 @@ export function SyncButton() {
 
   return (
     <Flex gap="2" align="center" style={{ whiteSpace: 'nowrap' }}>
-      <Button size="2" variant="soft" disabled={syncing} onClick={run}>
-        {syncing ? (
-          <>
-            <Spinner size="1" /> Синхронизация… {elapsed}s
-          </>
-        ) : (
-          '↻ Обновить'
-        )}
-      </Button>
+      <Box display={{ initial: 'none', sm: 'contents' }}>
+        <Button size="2" variant="soft" disabled={syncing} onClick={run}>
+          {syncing ? (
+            <>
+              <Spinner size="1" /> Синхронизация… {elapsed}s
+            </>
+          ) : (
+            <>
+              <UpdateIcon /> Обновить
+            </>
+          )}
+        </Button>
+      </Box>
+      <Box display={{ initial: 'contents', sm: 'none' }}>
+        <IconButton
+          size="2"
+          variant="soft"
+          radius="full"
+          disabled={syncing}
+          onClick={run}
+          title="Обновить"
+        >
+          {syncing ? <Spinner size="1" /> : <UpdateIcon />}
+        </IconButton>
+      </Box>
       {status()}
     </Flex>
   );

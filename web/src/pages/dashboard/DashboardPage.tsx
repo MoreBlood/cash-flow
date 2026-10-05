@@ -126,14 +126,12 @@ export function DashboardPage() {
     <Container size="4" px={{ initial: '3', sm: '4' }} py="5">
       <Flex direction="column" gap="4">
         {meta && period && (
-          <Flex justify="end" wrap="wrap" gap="3">
-            <PeriodPicker
-              months={months}
-              allRange={{ from: meta.firstDate, to: meta.lastDate }}
-              value={period}
-              onChange={changePeriod}
-            />
-          </Flex>
+          <PeriodPicker
+            months={months}
+            allRange={{ from: meta.firstDate, to: meta.lastDate }}
+            value={period}
+            onChange={changePeriod}
+          />
         )}
         {!data ? (
           <Flex justify="center" py="9">

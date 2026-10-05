@@ -88,7 +88,7 @@ export function TransactionModal({ tx, catalog, period, onChanged, onClose }: Pr
 
   return (
     <Dialog.Root open={!!tx} onOpenChange={(o) => !o && onClose()}>
-      <Dialog.Content maxWidth="440px">
+      <Dialog.Content maxWidth="440px" onOpenAutoFocus={(e) => e.preventDefault()}>
         <Flex direction="column" align="center" gap="1" mb="2">
           <Text size="2" color="gray">
             {tx.payee}

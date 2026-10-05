@@ -1,0 +1,108 @@
+/* Шапка: липкая, полупрозрачная с размытием — как в Revolut */
+.top-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--color-background) 82%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--gray-4);
+}
+
+/* Лента «таблеток» (периоды): скролл по горизонтали без полосы */
+.chips {
+  position: relative;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+}
+.chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* Нижний таб-бар — только на телефоне */
+.bottom-nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 10;
+    padding-bottom: env(safe-area-inset-bottom);
+    background: color-mix(in srgb, var(--color-background) 82%, transparent);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--gray-4);
+  }
+  .bottom-nav a {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--gray-10);
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bottom-nav a[aria-current="page"] {
+    color: var(--gray-12);
+  }
+  .app-main {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* карточки плотнее: на узком экране каждый пиксель на счету */
+  .rt-Card.rt-r-size-3 {
+    --card-padding: var(--space-4);
+  }
+
+  /* модалки — шторкой снизу, с «ручкой» */
+  .rt-BaseDialogScrollPadding {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: var(--space-8) 0 0;
+  }
+  .rt-BaseDialogContent,
+  .rt-BaseDialogContent.rt-r-max-w {
+    margin: auto 0 0;
+    max-width: none;
+    border-radius: 24px 24px 0 0;
+    padding-bottom: calc(var(--dialog-content-padding) + env(safe-area-inset-bottom));
+  }
+  .rt-BaseDialogContent::before {
+    content: "";
+    display: block;
+    width: 36px;
+    height: 4px;
+    margin: -8px auto 16px;
+    border-radius: 2px;
+    background: var(--gray-6);
+  }
+}
+
+@media (max-width: 767px) and (prefers-reduced-motion: no-preference) {
+  .rt-BaseDialogContent[data-state="open"] {
+    animation: sheet-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .rt-BaseDialogContent[data-state="closed"] {
+    opacity: 1;
+    animation: sheet-out 180ms ease-in;
+  }
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
