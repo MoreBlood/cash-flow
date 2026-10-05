@@ -57,7 +57,13 @@ Vercel → Project → Settings → Environment Variables:
 
 ## Обновления
 
-Кнопка создаёт копию репозитория (не форк). Чтобы подтянуть новую версию:
+Кнопка создаёт копию репозитория (не форк). Новая версия подтягивается так:
+
+- **Автоматически по понедельникам** и **по кнопке**: в своём репозитории на GitHub → Actions →
+  «Обновиться из MoreBlood/cash-flow» → Run workflow. Vercel пересоберёт сайт сам, миграции базы
+  применятся при сборке. Не хотите автообновлений — Actions → этот workflow → ⋯ → Disable workflow.
+- Если обновление меняет сами файлы в `.github/workflows/`, стандартный токен GitHub не может их
+  записать и запуск упадёт — тогда один раз вручную:
 
 ```bash
 git clone https://github.com/<вы>/cashflow && cd cashflow
@@ -65,4 +71,4 @@ git remote add upstream https://github.com/MoreBlood/cash-flow
 git fetch upstream && git merge upstream/main --allow-unrelated-histories -X theirs -m "Обновление" && git push
 ```
 
-Vercel пересоберёт сайт сам, миграции базы применятся при сборке.
+Поменяли только переменные окружения — Vercel → Deployments → ⋯ → Redeploy.

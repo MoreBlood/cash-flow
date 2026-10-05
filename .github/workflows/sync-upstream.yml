@@ -1,0 +1,30 @@
+# Для копий, созданных кнопкой Deploy (DEPLOY.md): подтянуть новую версию из MoreBlood/cash-flow.
+# Actions → «Обновиться из MoreBlood/cash-flow» → Run workflow; плюс автоматически по понедельникам.
+# Vercel пересоберёт сайт после пуша, миграции базы применятся при сборке.
+name: Обновиться из MoreBlood/cash-flow
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    # в самом исходном репозитории не запускаем
+    if: github.repository != 'MoreBlood/cash-flow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Слить изменения
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/MoreBlood/cash-flow.git
+          git fetch upstream main
+          git merge upstream/main --allow-unrelated-histories -X theirs -m "Обновление из MoreBlood/cash-flow"
+          git push
