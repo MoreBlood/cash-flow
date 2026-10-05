@@ -18,7 +18,10 @@ export function createApp({ service, auth, publicUrl = '' }: { service: Service;
   app.onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
     console.error(err);
-    return c.json({ error: String(err.message || err) }, 500);
+    // у ошибок драйвера (DrizzleQueryError) суть — в cause; текст запроса с параметрами наружу не отдаём
+    const cause = (err as { cause?: { message?: string; code?: string } }).cause;
+    const message = cause?.message ? `${cause.code ? `${cause.code}: ` : ''}${cause.message}` : String(err.message || err);
+    return c.json({ error: message }, 500);
   });
 
   // --- вход (Better Auth) и OAuth-метаданные для MCP-коннекторов ------------------
