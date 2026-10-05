@@ -5,6 +5,14 @@
 по курсу НБП на дату каждой операции, правила автокатегоризации и MCP-сервер, чтобы с финансами
 можно было работать из Claude или ChatGPT.
 
+![Cash Flow за месяц: доход, расход, net, норма сбережений, график и категории](docs/screenshots/dashboard.png)
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" width="250" alt="Телефон: Cash Flow">&nbsp;
+  <img src="docs/screenshots/mobile-capital.png" width="250" alt="Телефон: капитал">&nbsp;
+  <img src="docs/screenshots/mobile-sheet.png" width="250" alt="Телефон: карточка операции">
+</p>
+
 Два варианта установки, код один:
 
 - **Облако (Vercel)** — своя копия в один клик, вход через GitHub, база Turso, доступ отовсюду и
@@ -45,6 +53,26 @@
 - **«Банки»**: срок согласия PSD2, баланс по данным банка, статус синка, переподключение в один клик
   (счета перепривязываются сами по `identification_hash`, затем IBAN + валюта).
 - **MCP**: сводки, операции, категоризация с правилами, балансы, капитал, синк — 18 инструментов.
+- **С телефона** — как приложение: нижний таб-бар, карточки операций шторкой снизу.
+
+### Скриншоты
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/spending.png" alt="Траты по дням"><br><sub>Траты по дням — на что ушли деньги, клик открывает операции дня</sub></td>
+    <td width="50%"><img src="docs/screenshots/transaction.png" alt="Карточка операции"><br><sub>Карточка операции: категория, получатель, заметка, исключение из аналитики</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/capital.png" alt="Капитал"><br><sub>Капитал: все счета в базовой валюте, история и структура</sub></td>
+    <td><img src="docs/screenshots/banks.png" alt="Банки"><br><sub>Банки: срок согласия PSD2, балансы и переподключение в один клик</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings.png" alt="Настройки"><br><sub>Настройки: MCP-коннектор, перенос данных, категории и правила</sub></td>
+    <td><img src="docs/screenshots/consent.png" alt="Подключение ассистента"><br><sub>Подключение Claude / ChatGPT — OAuth, один клик</sub></td>
+  </tr>
+</table>
+
+<sub>Данные на скриншотах вымышленные (`scripts/demo-data.ts`).</sub>
 
 ---
 
@@ -92,6 +120,14 @@ npm run typecheck              # сервер
 npm run build --prefix web     # фронт → public/
 npm run db:generate            # миграция после правки src/db/schema.ts
 npm run auth:schema            # схема таблиц Better Auth после обновления better-auth / плагинов
+```
+
+Скриншоты для README снимаются на демо-данных через установленный Chrome:
+
+```bash
+DB_PATH=.scratch/demo.sqlite PORT=5070 HTTPS_PORT=0 AUTO_SYNC=off npm start     # пустая база, отдельный порт
+node scripts/demo-data.ts | curl -s -X POST localhost:5070/api/import -H 'Content-Type: application/json' --data @-
+DEMO_URL=http://localhost:5070 node scripts/screenshots.ts                       # → docs/screenshots/
 ```
 
 Как работает синк: окно запроса — 14 дней до последней проведённой операции (не дальше 89 дней),
