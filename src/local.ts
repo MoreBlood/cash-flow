@@ -9,7 +9,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { createClient } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql/node';
 import { createApp } from './http.ts';
-import { authConfigured, createAuth } from './auth.ts';
+import { authConfigured, createReadyAuth } from './auth.ts';
 import { backupDb } from './backup.ts';
 import { connection, dbConfig } from './db/index.ts';
 import { migrateAll } from './migrate.ts';
@@ -39,7 +39,7 @@ const service = createService(db, {
     if (arc) console.log('[backup] снапшот:', arc);
   },
 });
-const app = createApp({ service, auth: authConfigured() ? createAuth(db) : null, publicUrl: PUBLIC_URL });
+const app = createApp({ service, auth: authConfigured() ? await createReadyAuth(db) : null, publicUrl: PUBLIC_URL });
 
 // фронтенд (собранный Vite) + SPA-fallback
 app.use('/*', serveStatic({ root: join(ROOT, 'public') }));
