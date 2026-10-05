@@ -9,6 +9,7 @@ import {
 import type { Category, Settings } from '@shared/api/types';
 import { categoryStyle } from '@shared/config/categories';
 import { CategoriesCard } from '@widgets/settings/CategoriesCard';
+import { DataTransferCard } from '@widgets/settings/DataTransferCard';
 import { McpCard } from '@widgets/settings/McpCard';
 import { RulesCard } from '@widgets/settings/RulesCard';
 import { useEffect, useMemo, useState } from 'react';
@@ -175,6 +176,7 @@ export function SettingsPage() {
         {setup && <McpCard setup={setup} />}
         <CategoriesCard catalog={catalog} onChanged={loadCatalog} />
         <RulesCard catalog={catalog} />
+        <DataTransferCard />
       </Flex>
     </Container>
   );

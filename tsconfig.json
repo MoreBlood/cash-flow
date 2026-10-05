@@ -13,6 +13,8 @@
   },
   "include": [
     "src",
+    "api",
+    "scripts",
     "drizzle.config.ts"
   ]
 }

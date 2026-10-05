@@ -13,6 +13,7 @@ import {
 } from '@radix-ui/themes';
 import { connectBank, fetchAspsps, fetchBanks, fetchSetup, type Setup } from '@shared/api/client';
 import type { Aspsp, Bank, BankAccount } from '@shared/api/types';
+import { EbSetupCard } from '@widgets/banks/EbSetupCard';
 import { relativeTime } from '@shared/lib/format';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -120,16 +121,7 @@ export function BanksPage() {
             </Callout.Text>
           </Callout.Root>
         )}
-        {setup && !setup.eb && (
-          <Callout.Root color="amber">
-            <Callout.Text>
-              Enable Banking не настроен. Создайте приложение на enablebanking.com (Production,
-              restricted — привяжите свои счета), укажите redirect URL <b>{setup.redirectUrl}</b> и
-              задайте переменные <b>EB_APP_ID</b> и <b>EB_PRIVATE_KEY</b> (содержимое .pem), затем
-              Redeploy.
-            </Callout.Text>
-          </Callout.Root>
-        )}
+        <EbSetupCard />
         {(failed || error) && (
           <Callout.Root color="red">
             <Callout.Text>{failed || error}</Callout.Text>

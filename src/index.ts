@@ -1,4 +1,4 @@
-// Точка входа Vercel (zero-config Hono): база — Turso, вход — GitHub, статика — public/ через CDN.
+// Приложение для Vercel (функция api/index.ts): база — Turso, вход — GitHub, статика — public/ через CDN.
 // Миграции выполняются при сборке (npm run build → src/migrate.ts).
 import { drizzle } from 'drizzle-orm/libsql/web';
 import type { Hono } from 'hono';

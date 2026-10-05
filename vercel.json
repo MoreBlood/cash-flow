@@ -1,12 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "hono",
+  "framework": null,
   "buildCommand": "npm run build",
+  "outputDirectory": "public",
   "crons": [{ "path": "/api/cron/sync", "schedule": "30 5 * * *" }],
   "rewrites": [
-    {
-      "source": "/((?!api/|mcp|enablebanking/|\\.well-known/|assets/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/api/:path*", "destination": "/api" },
+    { "source": "/mcp", "destination": "/api" },
+    { "source": "/enablebanking/:path*", "destination": "/api" },
+    { "source": "/.well-known/:path*", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

@@ -29,14 +29,16 @@ export const baseURL = () =>
 
 export const mcpResource = () => `${baseURL()}/mcp`;
 
+/** Секрет установки: BETTER_AUTH_SECRET или производный от секрета OAuth-приложения GitHub. */
+export const authSecret = () =>
+  process.env.BETTER_AUTH_SECRET ||
+  createHash('sha256').update(`cashflow-auth:${process.env.GITHUB_CLIENT_SECRET ?? 'local'}`).digest('hex');
+
 /** Конфиг Better Auth — общий для сервера и генератора схемы (scripts/gen-auth-schema.ts). */
 export const authOptions = (database?: BetterAuthOptions['database']) =>
   ({
     baseURL: baseURL(),
-    // отдельный секрет не обязателен: выводим из секрета OAuth-приложения GitHub
-    secret:
-      process.env.BETTER_AUTH_SECRET ||
-      createHash('sha256').update(`cashflow-auth:${process.env.GITHUB_CLIENT_SECRET}`).digest('hex'),
+    secret: authSecret(),
     database,
     socialProviders: {
       github: {

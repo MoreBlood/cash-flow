@@ -92,6 +92,7 @@ export function createApp({ service, auth, publicUrl = '' }: { service: Service;
   // состояние установки — открыто без входа (секретов нет): по нему фронт показывает мастер настройки
   app.get('/api/setup', async (c) => {
     const s = authRequired() && auth && authConfigured() ? await session(c).catch(() => null) : null;
+    await service.loadEb().catch(() => {});
     return c.json({
       auth: authRequired(),
       authConfigured: !authRequired() || authConfigured(),
@@ -159,6 +160,22 @@ export function createApp({ service, auth, publicUrl = '' }: { service: Service;
   api.post('/transfer', async (c) => c.json(await service.addTransfer(await body(c))));
   api.post('/transaction/update', async (c) => c.json(await service.updateTransaction(await body(c))));
   api.post('/transaction/delete', async (c) => c.json(await service.deleteTransaction((await body(c)).id)));
+
+  api.get('/eb', async (c) => c.json(await service.ebStatus(redirectUrl())));
+  api.post('/eb', async (c) => {
+    await service.saveEb(await body(c));
+    return c.json(await service.ebStatus(redirectUrl()));
+  });
+  api.post('/eb/delete', async (c) => {
+    await service.deleteEb();
+    return c.json(await service.ebStatus(redirectUrl()));
+  });
+
+  api.get('/export', async (c) => {
+    c.header('Content-Disposition', `attachment; filename="cashflow-export-${new Date().toISOString().slice(0, 10)}.json"`);
+    return c.json(await service.exportData());
+  });
+  api.post('/import', async (c) => c.json(await service.importData(await body(c))));
 
   api.get('/sync-status', async (c) => c.json(await service.syncStatus()));
   api.post('/bank-sync', async (c) => c.json(await service.bankSync(psuOf(c))));

@@ -189,3 +189,26 @@ export const fetchAspsps = (country = 'PL') => get<Aspsp[]>(`/api/banks/aspsps?c
 /** → URL авторизации в банке (согласие на максимальный срок, до 180 дней) */
 export const connectBank = (aspsp: string, country = 'PL') =>
   post<{ url: string; days: number }>('/api/banks/connect', { aspsp, country });
+
+// --- Enable Banking (ключ приложения через UI) ---
+export interface EbStatus {
+  configured: boolean;
+  /** env — переменные окружения, ui — сохранён на странице «Банки» */
+  source: 'env' | 'ui' | null;
+  redirectUrl: string;
+  app?: { name: string | null; environment: string | null; active: boolean | null };
+  /** зарегистрирован ли redirect URL в приложении EB (null — EB не сообщил) */
+  redirectRegistered?: boolean | null;
+  error?: string;
+}
+export const fetchEbStatus = () => get<EbStatus>('/api/eb');
+export const saveEb = (appId: string, privateKey: string) =>
+  post<EbStatus>('/api/eb', { appId, privateKey });
+export const deleteEb = () => post<EbStatus>('/api/eb/delete', {});
+
+// --- перенос данных между установками ---
+export const importData = (data: unknown) =>
+  post<{ accounts: number; categories: number; rules: number; transactions: number }>(
+    '/api/import',
+    data,
+  );

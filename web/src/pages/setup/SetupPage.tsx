@@ -45,7 +45,7 @@ export function SetupPage({ setup }: { setup: Setup }) {
       <Flex direction="column" gap="4">
         <Heading size="7">💸 Настройка установки</Heading>
         <Text color="gray">
-          Сервис развёрнут, база создана. Осталось подключить вход и банк — до этого данные закрыты.
+          Сервис развёрнут, база создана. Осталось настроить вход — до этого данные закрыты.
         </Text>
 
         <Step n={1} title="Вход через GitHub">
@@ -63,43 +63,25 @@ export function SetupPage({ setup }: { setup: Setup }) {
           <Text size="2">Скопируйте Client ID и сгенерируйте Client secret.</Text>
         </Step>
 
-        <Step n={2} title="Банк через Enable Banking">
-          <Text size="2">
-            В{' '}
-            <Link href="https://enablebanking.com/cp/applications" target="_blank">
-              панели Enable Banking
-            </Link>{' '}
-            создайте приложение (Production) с redirect URL:
-          </Text>
-          <Copy value={setup.redirectUrl} />
-          <Text size="2">
-            Ключ сгенерируйте в браузере — скачается файл <Code>.pem</Code>. Активируйте приложение,
-            привязав свои счета (бесплатный restricted-режим: доступ только к вашим счетам).
-          </Text>
-        </Step>
-
-        <Step n={3} title="Переменные в Vercel">
+        <Step n={2} title="Переменные в Vercel">
           <Text size="2">Project → Settings → Environment Variables:</Text>
           <Text size="2">
-            <Code>GITHUB_CLIENT_ID</Code>, <Code>GITHUB_CLIENT_SECRET</Code> — из шага 1
+            <Code>GITHUB_CLIENT_ID</Code> и <Code>GITHUB_CLIENT_SECRET</Code> — из шага 1
             <br />
-            <Code>ALLOWED_GITHUB_USERS</Code> — ваш логин GitHub (кому разрешён вход)
-            <br />
-            <Code>EB_APP_ID</Code> — Application ID из шага 2
-            <br />
-            <Code>EB_PRIVATE_KEY</Code> — содержимое .pem целиком
+            <Code>ALLOWED_GITHUB_USERS</Code> — ваш логин GitHub (кому разрешён вход; несколько —
+            через запятую)
           </Text>
-          <Text size="2">Затем Deployments → ⋯ → Redeploy.</Text>
+          <Text size="2">Затем Deployments → ⋯ → Redeploy и обновите эту страницу.</Text>
         </Step>
 
-        <Step n={4} title="Дальше">
+        <Step n={3} title="Дальше — в интерфейсе">
           <Text size="2">
-            Войдите через GitHub → «Банки» → «Подключить банк». В «Настройках» — адрес для
-            подключения Claude или ChatGPT.
+            Войдите через GitHub. Банк подключается на странице «Банки» (там же загружается ключ
+            Enable Banking), данные из другой установки — в «Настройках» → «Перенос данных», там же
+            адрес для Claude и ChatGPT.
           </Text>
           <Text size="2" color="gray">
-            Сейчас: вход {setup.authConfigured ? 'настроен ✓' : 'не настроен'}, Enable Banking{' '}
-            {setup.eb ? 'настроен ✓' : 'не настроен'}.
+            Сейчас: вход {setup.authConfigured ? 'настроен ✓' : 'не настроен'}.
           </Text>
         </Step>
       </Flex>

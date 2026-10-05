@@ -26,34 +26,56 @@ export class EbError extends Error {
   }
 }
 
-// ключ: EB_PRIVATE_KEY (содержимое .pem — удобно в облаке) или EB_KEY_FILE (путь к .pem)
-export const ebConfigured = () =>
-  !!(process.env.EB_APP_ID && (process.env.EB_PRIVATE_KEY || process.env.EB_KEY_FILE));
+// Ключи приложения: из окружения (EB_APP_ID + EB_PRIVATE_KEY или EB_KEY_FILE) или сохранённые через UI
+// (страница «Банки» → setEbCredentials). Окружение важнее.
+export type EbCredentials = { appId: string; key: string | Buffer };
+const envConfigured = () => !!(process.env.EB_APP_ID && (process.env.EB_PRIVATE_KEY || process.env.EB_KEY_FILE));
+let fromEnv: EbCredentials | undefined;
+let fromUi: EbCredentials | null = null;
 
-let key: string | Buffer | undefined;
-function privateKey() {
-  if (process.env.EB_PRIVATE_KEY) return process.env.EB_PRIVATE_KEY.replace(/\\n/g, '\n');
-  const file = process.env.EB_KEY_FILE as string;
-  return readFileSync(isAbsolute(file) ? file : join(ROOT, file));
+export const setEbCredentials = (c: EbCredentials | null) => {
+  fromUi = c;
+};
+export const ebSource = (): 'env' | 'ui' | null => (envConfigured() ? 'env' : fromUi ? 'ui' : null);
+export const ebConfigured = () => !!ebSource();
+
+function credentials(): EbCredentials {
+  if (envConfigured()) {
+    const file = process.env.EB_KEY_FILE as string;
+    fromEnv ??= {
+      appId: process.env.EB_APP_ID as string,
+      key: process.env.EB_PRIVATE_KEY
+        ? process.env.EB_PRIVATE_KEY.replace(/\\n/g, '\n')
+        : readFileSync(isAbsolute(file) ? file : join(ROOT, file)),
+    };
+    return fromEnv;
+  }
+  if (fromUi) return fromUi;
+  throw new Error('Enable Banking не настроен — задайте ключ приложения на странице «Банки»');
 }
 
-function jwt() {
-  if (!ebConfigured()) throw new Error('Enable Banking не настроен: нужны EB_APP_ID и EB_PRIVATE_KEY (или EB_KEY_FILE)');
-  key ??= privateKey();
+function jwt(c: EbCredentials = credentials()) {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
-  const unsigned = `${b64({ typ: 'JWT', alg: 'RS256', kid: process.env.EB_APP_ID })}.${b64({
+  const unsigned = `${b64({ typ: 'JWT', alg: 'RS256', kid: c.appId })}.${b64({
     iss: 'enablebanking.com',
     aud: 'api.enablebanking.com',
     iat: now,
     exp: now + 3600,
   })}`;
-  return `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url')}`;
+  return `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(c.key, 'base64url')}`;
 }
 
 /** psu — когда синк запускает человек (PSD2: без PSU-заголовков ≤4 фоновых запросов в сутки). */
-async function request<T>(method: string, path: string, opts: { body?: unknown; psu?: Psu } = {}): Promise<T> {
-  const headers: Record<string, string> = { Authorization: `Bearer ${jwt()}`, 'Content-Type': 'application/json' };
+async function request<T>(
+  method: string,
+  path: string,
+  opts: { body?: unknown; psu?: Psu; credentials?: EbCredentials } = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${jwt(opts.credentials)}`,
+    'Content-Type': 'application/json',
+  };
   if (opts.psu?.ip) headers['Psu-Ip-Address'] = opts.psu.ip;
   if (opts.psu?.userAgent) headers['Psu-User-Agent'] = opts.psu.userAgent;
   const r = await fetch(API + path, {
@@ -103,10 +125,13 @@ export type EbSession = {
   access?: { valid_until?: string };
 };
 export type EbAspsp = { name: string; country: string; maximum_consent_validity?: number };
+export type EbApplication = { name?: string; environment?: string; active?: boolean; redirect_urls?: string[] };
 
 const enc = encodeURIComponent;
 
 export const eb = {
+  /** приложение, которому принадлежит ключ (проверка ключа и список redirect URL) */
+  application: (credentials?: EbCredentials) => request<EbApplication>('GET', '/application', { credentials }),
   aspsps: (country: string, psuType = 'personal') =>
     request<{ aspsps: EbAspsp[] }>('GET', `/aspsps?country=${enc(country)}&psu_type=${psuType}`),
   /** → {url}; validUntil — ISO, не больше maximum_consent_validity банка */

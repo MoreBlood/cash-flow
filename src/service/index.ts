@@ -3,10 +3,17 @@ import type { Db } from '../db/index.ts';
 import { eb, type Psu } from '../lib/eb.ts';
 import type { Currency } from '../lib/fx.ts';
 import * as catalog from './catalog.ts';
+import * as ebSettings from './eb-settings.ts';
 import * as ledger from './ledger.ts';
 import * as sync from './sync.ts';
+import * as transfer from './transfer.ts';
 
 export function createService(db: Db, opts: { onSyncDone?: (s: sync.SyncState) => unknown } = {}) {
+  // ключ Enable Banking мог быть сохранён через UI (в облаке — другим инстансом): подтягиваем перед походом в банк
+  const withEb = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (...a: A) => {
+    await ebSettings.loadEbCredentials(db);
+    return fn(...a);
+  };
   return {
     // аналитика
     summary: (from: string, to: string, base: Currency) => ledger.summary(db, from, to, base),
@@ -40,22 +47,35 @@ export function createService(db: Db, opts: { onSyncDone?: (s: sync.SyncState) =
     deleteTransaction: (id?: string) => ledger.deleteTransaction(db, id),
 
     // банки
-    bankSync: (psu?: Psu, accountIds?: string[]) => sync.runBankSync(db, { psu, accountIds, onDone: opts.onSyncDone }),
-    scheduledSync: () => sync.scheduledSync(db, opts.onSyncDone),
+    bankSync: withEb((psu?: Psu, accountIds?: string[]) =>
+      sync.runBankSync(db, { psu, accountIds, onDone: opts.onSyncDone }),
+    ),
+    scheduledSync: withEb(() => sync.scheduledSync(db, opts.onSyncDone)),
     syncStatus: async () => ({
       ...(await sync.syncState(db)),
       syncing: await sync.isSyncing(db),
       expiring: await sync.expiringConsents(db),
     }),
     banks: () => sync.banksView(db),
-    aspsps: async (country = 'PL') =>
+    aspsps: withEb(async (country: string = 'PL') =>
       (await eb.aspsps(country)).aspsps.map((b) => ({
         name: b.name,
         country: b.country,
         maxConsentDays: Math.floor((b.maximum_consent_validity || 0) / 86400),
       })),
-    startConnect: (b: Parameters<typeof sync.startConnect>[1]) => sync.startConnect(db, b),
-    completeConnect: (q: Parameters<typeof sync.completeConnect>[1]) => sync.completeConnect(db, q),
+    ),
+    startConnect: withEb((b: Parameters<typeof sync.startConnect>[1]) => sync.startConnect(db, b)),
+    completeConnect: withEb((q: Parameters<typeof sync.completeConnect>[1]) => sync.completeConnect(db, q)),
+
+    // ключ Enable Banking через UI
+    loadEb: () => ebSettings.loadEbCredentials(db),
+    ebStatus: (redirectUrl: string) => ebSettings.ebStatus(db, redirectUrl),
+    saveEb: (b: Parameters<typeof ebSettings.saveEbCredentials>[1]) => ebSettings.saveEbCredentials(db, b),
+    deleteEb: () => ebSettings.deleteEbCredentials(db),
+
+    // перенос данных между установками
+    exportData: () => transfer.exportData(db),
+    importData: (d: Parameters<typeof transfer.importData>[1]) => transfer.importData(db, d),
   };
 }
 

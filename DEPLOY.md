@@ -23,15 +23,7 @@ Turso, свой вход через GitHub и своё приложение Enab
 
 Скопируйте Client ID и сгенерируйте Client secret.
 
-## 3. Банк через Enable Banking
-
-В [панели Enable Banking](https://enablebanking.com/cp/applications) создайте приложение:
-
-- environment **Production**, redirect URL `https://<проект>.vercel.app/enablebanking/auth_callback`;
-- ключ сгенерируйте в браузере — скачается `<application-id>.pem`;
-- активируйте приложение, привязав свои счета (restricted-режим: доступ только к вашим счетам).
-
-## 4. Переменные окружения
+## 3. Переменные окружения
 
 Vercel → Project → Settings → Environment Variables:
 
@@ -40,15 +32,21 @@ Vercel → Project → Settings → Environment Variables:
 | `GITHUB_CLIENT_ID` | из шага 2 |
 | `GITHUB_CLIENT_SECRET` | из шага 2 |
 | `ALLOWED_GITHUB_USERS` | ваш логин GitHub (несколько — через запятую) |
-| `EB_APP_ID` | Application ID из шага 3 |
-| `EB_PRIVATE_KEY` | содержимое `.pem` целиком (вместе со строками BEGIN/END) |
 
-Затем Deployments → ⋯ → **Redeploy**.
+Затем Deployments → ⋯ → **Redeploy**. Это единственная настройка вне интерфейса.
 
-## 5. Пользоваться
+## 4. Всё остальное — в интерфейсе
 
-- Войдите через GitHub → **Банки** → «Подключить банк». Согласие берётся на максимум, который даёт
-  банк (Revolut и PKO — 180 дней); за 14 дней до конца в шапке появится напоминание.
+Войдите через GitHub.
+
+- **Банки** → «Подключение к Enable Banking»: в [панели Enable Banking](https://enablebanking.com/cp/applications)
+  создайте приложение (Production) с redirect URL, который показан на странице, сгенерируйте ключ и
+  загрузите `.pem` — Application ID подставится сам, ключ проверится и сохранится в базе зашифрованным.
+  Активируйте приложение, привязав свои счета (restricted-режим: доступ только к вашим счетам).
+  Затем «Подключить банк». Согласие берётся на максимум банка (Revolut и PKO — 180 дней).
+- **Настройки → Перенос данных** — если данные уже есть в другой установке (например, локальной):
+  там «Скачать экспорт», здесь «Загрузить из файла». С тем же приложением Enable Banking счета
+  продолжат синкаться без переподключения банков.
 - Синк — кнопкой «↻ Обновить» и автоматически раз в день (около 07:30 по Варшаве).
 - **Ассистенты (MCP).** Адрес — в «Настройках», вида `https://<проект>.vercel.app/mcp`:
   - **Claude** (веб, Desktop, телефон): Настройки → Коннекторы → «Добавить свой коннектор» → адрес →
@@ -59,6 +57,12 @@ Vercel → Project → Settings → Environment Variables:
 
 ## Обновления
 
-Ваш репозиторий — копия на момент развёртывания. Чтобы подтянуть новую версию, нажмите в нём на
-GitHub «Sync fork» (или влейте изменения из `MoreBlood/cash-flow`) — Vercel пересоберёт сайт сам,
-миграции базы применятся при сборке.
+Кнопка создаёт копию репозитория (не форк). Чтобы подтянуть новую версию:
+
+```bash
+git clone https://github.com/<вы>/cashflow && cd cashflow
+git remote add upstream https://github.com/MoreBlood/cash-flow
+git fetch upstream && git merge upstream/main --allow-unrelated-histories -X theirs -m "Обновление" && git push
+```
+
+Vercel пересоберёт сайт сам, миграции базы применятся при сборке.
